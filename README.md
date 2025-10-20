@@ -7,7 +7,7 @@ Fast, private, and resource-friendly analytics for local environments, powered b
 - Drop-in snippet that tracks page, click, scroll, SPA transition, and heartbeat events with sampling, UID/SID storage, and sendBeacon fallback.
 - FastAPI collector translates JSON payloads into InfluxDB line protocol with route normalization to keep series cardinality low.
 - Zero-token exposure: dashboard consumes FastAPI proxy endpoints for Flux queries, protecting the Influx admin token.
-- Static HTML dashboard shows total events, top routes, and a lightweight time series without external dependencies.
+- Static HTML dashboard shows total events, top routes, and a recent event timeline (type, element, coordinates) without external dependencies.
 - Docker Compose stack brings up InfluxDB 2.x and the app with conservative CPU/memory limits and no public Influx port.
 
 ## Quick Start
@@ -68,7 +68,7 @@ Duplicate the provided `.env.example` if you need to override values.
 Measurement: `logflow`
 
 - Tags: `site`, `t` (event type), `route`
-- Fields: `count` (int), `depth` (int), `sec` (int), `vp_w`, `vp_h`, `vp_dpr`, `path` (string)
+- Fields: `count` (int), `depth` (int), `sec` (int), `vp_w`, `vp_h`, `vp_dpr`, `path` (string), `element` (string, optional), `cx`/`cy` (ints, optional), `payload` (stringified JSON summary)
 
 Routes are normalized on ingest (`/\d+` and long hex segments → `/:id`) to prevent exploding tag cardinality.
 

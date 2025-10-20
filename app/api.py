@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 import logging
 import os
 import re
@@ -186,6 +187,45 @@ async def series(
             count = int(float(value))
         except ValueError:
             continue
-        points.append({"ts": ts, "count": count})
+    points.append({"ts": ts, "count": count})
     points.sort(key=lambda item: item["ts"])
     return {"site": site, "hours": hours, "bucket": bucket, "points": points}
+
+
+@router.get("/events")
+async def recent_events(
+    request: Request,
+    hours: int = Query(24, ge=1, le=168),
+    limit: int = Query(20, ge=1, le=200),
+    site: str | None = Query(None),
+) -> Dict[str, Any]:
+    cfg = _get_influx_config()
+    query = (
+        f'from(bucket: "{_escape_flux(cfg["bucket"])}")\n'
+        f"  |> range(start: -{hours}h)\n"
+        '  |> filter(fn: (r) => r._measurement == "logflow" and r._field == "payload")\n'
+        f"{_site_filter(site)}"
+        '  |> sort(columns: ["_time"], desc: true)\n'
+        f"  |> limit(n: {limit})\n"
+    )
+    rows = await _query_flux(request, query)
+    events: List[Dict[str, Any]] = []
+    for row in rows:
+        raw = row.get("_value") or ""
+        payload: Dict[str, Any] = {}
+        if isinstance(raw, str) and raw:
+            try:
+                payload = json.loads(raw)
+                if not isinstance(payload, dict):
+                    payload = {"raw": raw}
+            except json.JSONDecodeError:
+                payload = {"raw": raw}
+        event_entry = {
+            "time": row.get("_time"),
+            "type": row.get("t") or payload.get("type"),
+            "route": row.get("route") or payload.get("route"),
+            "payload": payload,
+        }
+        events.append(event_entry)
+    events.sort(key=lambda item: item.get("time") or "", reverse=True)
+    return {"site": site, "hours": hours, "limit": limit, "events": events}

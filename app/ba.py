@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -117,6 +118,14 @@ async def ingest(request: Request) -> Response:
     vp_dpr = _coerce_float(vp.get("dpr") if isinstance(vp, dict) else None, 0.0)
 
     path_field = event.get("path") or event.get("url") or route
+    element = str(event.get("element") or "").strip()
+
+    coords = event.get("coords") if isinstance(event.get("coords"), dict) else {}
+    raw_cx = coords.get("x") if isinstance(coords, dict) else None
+    raw_cy = coords.get("y") if isinstance(coords, dict) else None
+    cx = _coerce_int(raw_cx, 0)
+    cy = _coerce_int(raw_cy, 0)
+    has_coords = raw_cx is not None or raw_cy is not None
 
     timestamp_ms = int(time.time() * 1000)
     for key in ("ts", "timestamp"):
@@ -137,6 +146,44 @@ async def ingest(request: Request) -> Response:
     dpr_str = f"{vp_dpr:.3f}".rstrip("0").rstrip(".") or "0"
     fields.append(f"vp_dpr={dpr_str}")
     fields.append(f'path="{_escape_field(path_field)}"')
+    if element:
+        fields.append(f'element="{_escape_field(element)}"')
+    if has_coords:
+        fields.append(f"cx={cx}i")
+        fields.append(f"cy={cy}i")
+
+    payload_data: Dict[str, Any] = {
+        "site": site,
+        "type": event_type,
+        "route": route,
+        "path": path_field,
+        "source": event.get("source"),
+        "trigger": event.get("trigger"),
+        "depth": depth,
+        "sec": sec,
+        "ts": timestamp_ms,
+    }
+    if element:
+        payload_data["element"] = element
+    if has_coords:
+        payload_data["coords"] = {"x": cx, "y": cy}
+    event_id = event.get("event_id")
+    if isinstance(event_id, str) and event_id:
+        payload_data["event_id"] = event_id
+    uid = event.get("uid")
+    if isinstance(uid, str) and uid:
+        payload_data["uid"] = uid
+    sid = event.get("sid")
+    if isinstance(sid, str) and sid:
+        payload_data["sid"] = sid
+    if vp_w or vp_h or vp_dpr:
+        payload_data["vp"] = {"w": vp_w, "h": vp_h, "dpr": vp_dpr}
+
+    try:
+        payload_json = json.dumps(payload_data, separators=(",", ":"))
+        fields.append(f'payload="{_escape_field(payload_json)}"')
+    except (TypeError, ValueError):
+        pass
 
     line = (
         f"logflow,site={_escape_tag(site)},t={_escape_tag(event_type)},route={_escape_tag(route)} "

@@ -78,6 +78,10 @@
           send("click", {
             element: describeTarget(target),
             depth: Math.round(state.maxDepth),
+            coords: {
+              x: Math.round(ev.clientX || 0),
+              y: Math.round(ev.clientY || 0),
+            },
           });
         },
         true

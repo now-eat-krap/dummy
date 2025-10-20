@@ -14,21 +14,18 @@
     .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
     .card { background: #ffffff; border-radius: 0.75rem; padding: 1.5rem; box-shadow: 0 12px 25px -18px rgba(15, 23, 42, 0.6); }
     .card h2 { margin: 0 0 0.5rem; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.08em; color: #6b7280; }
-    .card p { margin: 0; font-size: 2.4rem; font-weight: 700; color: #111827; }
+    .card p { margin: 0; font-size: 2.4rem; font-weight: 700; color: #ffffff; text-shadow: 0 1px 2px rgba(15, 23, 42, 0.35); }
     section { margin-bottom: 2.5rem; }
     section h3 { margin: 0 0 0.75rem; font-size: 1.1rem; color: #1f2937; }
     table { width: 100%; border-collapse: collapse; background: #ffffff; border-radius: 0.75rem; overflow: hidden; box-shadow: 0 12px 25px -18px rgba(15, 23, 42, 0.6); }
     th, td { padding: 0.75rem 1rem; text-align: left; font-size: 0.95rem; }
     th { background: #f3f4f6; color: #4b5563; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; }
     tr:nth-child(even) td { background: #f9fafb; }
-    #series-list { list-style: none; margin: 0; padding: 0; background: #ffffff; border-radius: 0.75rem; box-shadow: 0 12px 25px -18px rgba(15, 23, 42, 0.6); }
-    #series-list li { padding: 0.65rem 1rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; font-size: 0.9rem; }
-    #series-list li:last-child { border-bottom: none; }
-    .series-time { color: #6b7280; font-family: "Fira Mono", "SFMono-Regular", ui-monospace, "Roboto Mono", monospace; }
     .muted { color: #9ca3af; font-size: 0.85rem; }
+    .series-time { color: #6b7280; font-family: "Fira Mono", "SFMono-Regular", ui-monospace, "Roboto Mono", monospace; }
     @media (prefers-color-scheme: dark) {
       body { background: #0f172a; color: #e2e8f0; }
-      .card, table, #series-list { background: #111c33; box-shadow: 0 12px 25px -18px rgba(0, 0, 0, 0.7); }
+      .card, table { background: #111c33; box-shadow: 0 12px 25px -18px rgba(0, 0, 0, 0.7); }
       header p, th, .series-time, .muted { color: #94a3b8; }
       tr:nth-child(even) td { background: rgba(148, 163, 184, 0.05); }
       th { background: rgba(148, 163, 184, 0.1); }
@@ -42,7 +39,7 @@
       <p>
         Site:
         <span id="site-label">-</span>
-        · Last refresh:
+        - Last refresh:
         <span id="refreshed-at" class="muted">never</span>
       </p>
     </header>
@@ -65,20 +62,29 @@
         </thead>
         <tbody id="routes-body">
           <tr>
-            <td colspan="2" class="muted">Loading…</td>
+            <td colspan="2" class="muted">Loading...</td>
           </tr>
         </tbody>
       </table>
     </section>
 
     <section>
-      <h3>Activity Series</h3>
-      <ul id="series-list">
-        <li class="muted">
-          <span>Waiting for data…</span>
-          <span class="series-time">--:--</span>
-        </li>
-      </ul>
+      <h3>Recent Events</h3>
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Time</th>
+            <th scope="col">Type</th>
+            <th scope="col">Route</th>
+            <th scope="col">Details</th>
+          </tr>
+        </thead>
+        <tbody id="events-body">
+          <tr>
+            <td colspan="4" class="muted">Waiting for events...</td>
+          </tr>
+        </tbody>
+      </table>
     </section>
   </main>
 
@@ -91,7 +97,7 @@
       refresh();
 
       async function refresh() {
-        await Promise.all([loadSummary(), loadTopRoutes(), loadSeries()]);
+        await Promise.all([loadSummary(), loadTopRoutes(), loadEvents()]);
         document.getElementById("refreshed-at").textContent = new Date().toLocaleString();
       }
 
@@ -141,31 +147,63 @@
         }
       }
 
-      async function loadSeries() {
-        const list = document.getElementById("series-list");
+      async function loadEvents() {
+        const body = document.getElementById("events-body");
         try {
-          const res = await fetch(buildUrl("/api/series", { site: site, hours: hours, bucket: params.get("bucket") || "5m" }));
+          const res = await fetch(buildUrl("/api/events", { site: site, hours: hours, limit: 25 }));
           if (!res.ok) {
-            throw new Error("Series request failed");
+            throw new Error("Events request failed");
           }
           const data = await res.json();
-          const points = Array.isArray(data.points) ? data.points : [];
-          if (!points.length) {
-            list.innerHTML = '<li class="muted"><span>No events recorded.</span><span class="series-time">--:--</span></li>';
+          const events = Array.isArray(data.events) ? data.events : [];
+          if (!events.length) {
+            body.innerHTML = '<tr><td colspan="4" class="muted">No events for this range.</td></tr>';
             return;
           }
-          list.innerHTML = points
-            .map(function (point) {
-              const ts = point.ts ? new Date(point.ts).toLocaleTimeString() : "--:--";
-              const count = typeof point.count === "number" ? point.count : 0;
+          body.innerHTML = events
+            .map(function (item) {
+              const when = item.time ? new Date(item.time).toLocaleTimeString() : "--:--";
+              const payload = item.payload || {};
+              const type = (item.type || payload.type || "event").toString().toUpperCase();
+              const route = item.route || payload.route || "/";
+              const detailParts = [];
+              if (payload.element) {
+                detailParts.push("element: " + escapeHtml(payload.element));
+              }
+              if (payload.coords && typeof payload.coords === "object") {
+                const coordBits = [];
+                if (payload.coords.x !== undefined) {
+                  coordBits.push("x=" + payload.coords.x);
+                }
+                if (payload.coords.y !== undefined) {
+                  coordBits.push("y=" + payload.coords.y);
+                }
+                if (coordBits.length) {
+                  detailParts.push("coords: " + coordBits.join(" "));
+                }
+              }
+              if (payload.depth !== undefined) {
+                detailParts.push("depth: " + payload.depth);
+              }
+              if (payload.sec !== undefined) {
+                detailParts.push("elapsed: " + payload.sec + "s");
+              }
+              if (payload.trigger) {
+                detailParts.push("trigger: " + escapeHtml(payload.trigger));
+              }
+              const detail = detailParts.length ? detailParts.join(" · ") : "-";
               return (
-                '<li><span>' + count.toLocaleString() + '</span>' +
-                '<span class="series-time">' + ts + "</span></li>"
+                "<tr>" +
+                "<td>" + escapeHtml(when) + "</td>" +
+                "<td>" + escapeHtml(type) + "</td>" +
+                "<td>" + escapeHtml(route) + "</td>" +
+                "<td>" + detail + "</td>" +
+                "</tr>"
               );
             })
             .join("");
         } catch (err) {
-          list.innerHTML = '<li class="muted"><span>Series unavailable.</span><span class="series-time">--:--</span></li>';
+          body.innerHTML = '<tr><td colspan="4" class="muted">Failed to load events.</td></tr>';
           console.debug(err);
         }
       }
