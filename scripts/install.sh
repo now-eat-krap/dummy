@@ -27,8 +27,8 @@ COMPOSE_FILE="${REPO_DIR}/docker/docker-compose.yml"
 echo "[logflow] pulling images..."
 "${COMPOSE_CMD[@]}" -f "${COMPOSE_FILE}" pull --ignore-pull-failures
 
-echo "[logflow] starting services..."
-"${COMPOSE_CMD[@]}" -f "${COMPOSE_FILE}" up -d
+echo "[logflow] starting services (with --build)..."
+"${COMPOSE_CMD[@]}" -f "${COMPOSE_FILE}" up -d --build
 
 HEALTH_URL="http://localhost:9000/ba.js"
 echo "[logflow] waiting for ${HEALTH_URL} ..."
