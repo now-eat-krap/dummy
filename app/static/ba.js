@@ -248,7 +248,8 @@
 
       const body = JSON.stringify(payload);
       try {
-        if (navigator.sendBeacon && navigator.sendBeacon(endpoint, body)) {
+        const blob = new Blob([body], { type: "application/json" });
+        if (navigator.sendBeacon && navigator.sendBeacon(endpoint, blob)) {
           return;
         }
       } catch (_) {
