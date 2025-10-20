@@ -5,7 +5,7 @@ import time
 from typing import Any, Dict
 
 import httpx
-from fastapi import APIRouter, Body, Request, Response
+from fastapi import APIRouter, Request, Response
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
@@ -92,9 +92,18 @@ async def _write_line(request: Request, line: str, cfg: Dict[str, str]) -> None:
 
 
 @router.post("/ba", status_code=204)
-async def ingest(request: Request, event: Dict[str, Any] = Body(...)) -> Response:
+async def ingest(request: Request) -> Response:
     cfg = _get_influx_config()
 
+    try:
+        payload = await request.json()
+    except Exception:
+        return Response(status_code=204)
+
+    if not isinstance(payload, dict):
+        return Response(status_code=204)
+
+    event = payload
     site = str(event.get("site") or "default").strip() or "default"
     event_type = str(event.get("type") or "event").strip() or "event"
     route = _normalize_route(event.get("route") or event.get("path") or event.get("url"))
