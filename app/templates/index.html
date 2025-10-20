@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Logflow Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; padding: 0; background: #f6f8fb; color: #111827; }
+    main { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
+    header { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 2rem; }
+    header h1 { font-size: 1.8rem; margin: 0; }
+    header p { margin: 0; color: #4b5563; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+    .card { background: #ffffff; border-radius: 0.75rem; padding: 1.5rem; box-shadow: 0 12px 25px -18px rgba(15, 23, 42, 0.6); }
+    .card h2 { margin: 0 0 0.5rem; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.08em; color: #6b7280; }
+    .card p { margin: 0; font-size: 2.4rem; font-weight: 700; color: #111827; }
+    section { margin-bottom: 2.5rem; }
+    section h3 { margin: 0 0 0.75rem; font-size: 1.1rem; color: #1f2937; }
+    table { width: 100%; border-collapse: collapse; background: #ffffff; border-radius: 0.75rem; overflow: hidden; box-shadow: 0 12px 25px -18px rgba(15, 23, 42, 0.6); }
+    th, td { padding: 0.75rem 1rem; text-align: left; font-size: 0.95rem; }
+    th { background: #f3f4f6; color: #4b5563; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; }
+    tr:nth-child(even) td { background: #f9fafb; }
+    #series-list { list-style: none; margin: 0; padding: 0; background: #ffffff; border-radius: 0.75rem; box-shadow: 0 12px 25px -18px rgba(15, 23, 42, 0.6); }
+    #series-list li { padding: 0.65rem 1rem; border-bottom: 1px solid #e5e7eb; display: flex; justify-content: space-between; font-size: 0.9rem; }
+    #series-list li:last-child { border-bottom: none; }
+    .series-time { color: #6b7280; font-family: "Fira Mono", "SFMono-Regular", ui-monospace, "Roboto Mono", monospace; }
+    .muted { color: #9ca3af; font-size: 0.85rem; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #0f172a; color: #e2e8f0; }
+      .card, table, #series-list { background: #111c33; box-shadow: 0 12px 25px -18px rgba(0, 0, 0, 0.7); }
+      header p, th, .series-time, .muted { color: #94a3b8; }
+      tr:nth-child(even) td { background: rgba(148, 163, 184, 0.05); }
+      th { background: rgba(148, 163, 184, 0.1); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Logflow Overview</h1>
+      <p>
+        Site:
+        <span id="site-label">-</span>
+        · Last refresh:
+        <span id="refreshed-at" class="muted">never</span>
+      </p>
+    </header>
+
+    <div class="cards">
+      <div class="card">
+        <h2>Events (24h)</h2>
+        <p id="total-count">-</p>
+      </div>
+    </div>
+
+    <section>
+      <h3>Top Routes</h3>
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Route</th>
+            <th scope="col">Events</th>
+          </tr>
+        </thead>
+        <tbody id="routes-body">
+          <tr>
+            <td colspan="2" class="muted">Loading…</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h3>Activity Series</h3>
+      <ul id="series-list">
+        <li class="muted">
+          <span>Waiting for data…</span>
+          <span class="series-time">--:--</span>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      const params = new URLSearchParams(window.location.search);
+      const site = params.get("site") || "logflow";
+      const hours = Number(params.get("hours") || 24);
+      document.getElementById("site-label").textContent = site;
+      refresh();
+
+      async function refresh() {
+        await Promise.all([loadSummary(), loadTopRoutes(), loadSeries()]);
+        document.getElementById("refreshed-at").textContent = new Date().toLocaleString();
+      }
+
+      async function loadSummary() {
+        try {
+          const res = await fetch(buildUrl("/api/summary", { site: site, hours: hours }));
+          if (!res.ok) {
+            throw new Error("Summary request failed");
+          }
+          const data = await res.json();
+          const total = (data && typeof data.count === "number") ? data.count : 0;
+          document.getElementById("total-count").textContent = total.toLocaleString();
+        } catch (err) {
+          document.getElementById("total-count").textContent = "0";
+          console.debug(err);
+        }
+      }
+
+      async function loadTopRoutes() {
+        const body = document.getElementById("routes-body");
+        try {
+          const res = await fetch(buildUrl("/api/top-routes", { site: site, hours: hours, limit: 10 }));
+          if (!res.ok) {
+            throw new Error("Top routes request failed");
+          }
+          const data = await res.json();
+          const routes = Array.isArray(data.routes) ? data.routes : [];
+          if (!routes.length) {
+            body.innerHTML = '<tr><td colspan="2" class="muted">No data for this range.</td></tr>';
+            return;
+          }
+          body.innerHTML = routes
+            .map(function (item) {
+              const safeRoute = item.route || "/";
+              const count = typeof item.count === "number" ? item.count : 0;
+              return (
+                "<tr>" +
+                '<td>' + escapeHtml(safeRoute) + "</td>" +
+                '<td>' + count.toLocaleString() + "</td>" +
+                "</tr>"
+              );
+            })
+            .join("");
+        } catch (err) {
+          body.innerHTML = '<tr><td colspan="2" class="muted">Failed to load routes.</td></tr>';
+          console.debug(err);
+        }
+      }
+
+      async function loadSeries() {
+        const list = document.getElementById("series-list");
+        try {
+          const res = await fetch(buildUrl("/api/series", { site: site, hours: hours, bucket: params.get("bucket") || "5m" }));
+          if (!res.ok) {
+            throw new Error("Series request failed");
+          }
+          const data = await res.json();
+          const points = Array.isArray(data.points) ? data.points : [];
+          if (!points.length) {
+            list.innerHTML = '<li class="muted"><span>No events recorded.</span><span class="series-time">--:--</span></li>';
+            return;
+          }
+          list.innerHTML = points
+            .map(function (point) {
+              const ts = point.ts ? new Date(point.ts).toLocaleTimeString() : "--:--";
+              const count = typeof point.count === "number" ? point.count : 0;
+              return (
+                '<li><span>' + count.toLocaleString() + '</span>' +
+                '<span class="series-time">' + ts + "</span></li>"
+              );
+            })
+            .join("");
+        } catch (err) {
+          list.innerHTML = '<li class="muted"><span>Series unavailable.</span><span class="series-time">--:--</span></li>';
+          console.debug(err);
+        }
+      }
+
+      function buildUrl(path, query) {
+        const url = new URL(path, window.location.origin);
+        Object.keys(query || {}).forEach(function (key) {
+          const value = query[key];
+          if (value === undefined || value === null || value === "") {
+            return;
+          }
+          url.searchParams.set(key, value);
+        });
+        return url.toString();
+      }
+
+      function escapeHtml(input) {
+        return String(input)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+    })();
+  </script>
+</body>
+</html>

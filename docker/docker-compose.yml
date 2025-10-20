@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  influxdb:
+    image: influxdb:2.7
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: logflow
+      DOCKER_INFLUXDB_INIT_PASSWORD: logflow1234
+      DOCKER_INFLUXDB_INIT_ORG: logflow
+      DOCKER_INFLUXDB_INIT_BUCKET: logflow
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: logflow-dev-token
+      DOCKER_INFLUXDB_INIT_RETENTION: 30d
+    volumes:
+      - influx-data:/var/lib/influxdb2
+    healthcheck:
+      test: ["CMD", "influx", "ping", "--host", "http://localhost:8086"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    mem_limit: "512m"
+    cpus: "0.8"
+
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.app
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: logflow-dev-token
+      INFLUX_ORG: logflow
+      INFLUX_BUCKET: logflow
+      ALLOW_ORIGINS: "*"
+    ports:
+      - "9000:9000"
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    mem_limit: "256m"
+    cpus: "0.5"
+
+volumes:
+  influx-data:
