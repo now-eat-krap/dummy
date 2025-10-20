@@ -246,6 +246,12 @@
         extra || {}
       );
 
+      try {
+        console.debug("logflow →", endpoint, payload);
+      } catch (_) {
+        // ignore logging errors
+      }
+
       const body = JSON.stringify(payload);
       try {
         const blob = new Blob([body], { type: "application/json" });
