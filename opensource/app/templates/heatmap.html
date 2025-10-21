@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Heatmap View</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top, #1f2937, #0b1120 65%);
+      color: #e2e8f0;
+    }
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 2.5rem 1.5rem 3.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 2.5rem;
+    }
+    header h1 {
+      margin: 0 0 0.4rem;
+      font-size: clamp(1.75rem, 2vw, 2.25rem);
+      font-weight: 700;
+    }
+    .summary {
+      margin: 0;
+      font-size: 0.95rem;
+      color: #94a3b8;
+      line-height: 1.6;
+    }
+    code {
+      font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background: rgba(148, 163, 184, 0.12);
+      padding: 0.1rem 0.35rem;
+      border-radius: 0.4rem;
+      color: #f8fafc;
+    }
+    .stage {
+      position: relative;
+      width: min(96vw, 960px);
+      aspect-ratio: 16 / 9;
+      border-radius: 22px;
+      overflow: hidden;
+      background: rgba(15, 23, 42, 0.75);
+      box-shadow: 0 40px 80px -40px rgba(15, 23, 42, 0.8);
+      margin: 0 auto;
+    }
+    .wireframe {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      background: rgba(15, 23, 42, 0.6);
+    }
+    .wireframe-content {
+      width: 100%;
+      height: 100%;
+    }
+    .wireframe-content > * {
+      width: 100%;
+      height: 100%;
+    }
+    .overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+    .heatmap-grid {
+      display: grid;
+      width: 100%;
+      height: 100%;
+      mix-blend-mode: screen;
+    }
+    .cell {
+      background: rgba(239, 68, 68, var(--a, 0));
+      transition: background 180ms ease;
+    }
+    .heatmap-placeholder {
+      box-sizing: border-box;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.75rem;
+      text-align: center;
+      padding: 2.5rem;
+      background: repeating-linear-gradient(135deg, rgba(30, 41, 59, 0.85), rgba(30, 41, 59, 0.85) 18px, rgba(15, 23, 42, 0.85) 18px, rgba(15, 23, 42, 0.85) 36px);
+      color: #cbd5f5;
+      border: 1px dashed rgba(148, 163, 184, 0.25);
+    }
+    .meta {
+      background: rgba(15, 23, 42, 0.65);
+      border-radius: 20px;
+      padding: 1.6rem 1.8rem;
+      box-shadow: 0 20px 40px -30px rgba(8, 15, 31, 0.9);
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .meta h2 {
+      margin: 0;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #e5e9f5;
+    }
+    .meta dl {
+      margin: 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 0.75rem 1.5rem;
+    }
+    .meta dl div {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+    .meta dt {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #94a3b8;
+    }
+    .meta dd {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #f8fafc;
+    }
+    .route-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+    .route-chip {
+      display: inline-flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      padding: 0.75rem 1rem;
+      border-radius: 0.9rem;
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      background: rgba(15, 23, 42, 0.5);
+      min-width: 160px;
+      text-decoration: none;
+      color: inherit;
+      transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+    }
+    .route-chip:hover {
+      border-color: rgba(239, 68, 68, 0.55);
+      background: rgba(239, 68, 68, 0.08);
+      transform: translateY(-2px);
+    }
+    .route-chip.is-active {
+      border-color: rgba(239, 68, 68, 0.75);
+      background: rgba(239, 68, 68, 0.14);
+    }
+    .route-chip__route {
+      font-size: 0.92rem;
+      font-weight: 600;
+      word-break: break-all;
+    }
+    .route-chip__meta {
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #94a3b8;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: rgba(15, 23, 42, 0.45);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    th, td {
+      padding: 0.75rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+      font-size: 0.95rem;
+    }
+    th {
+      background: rgba(148, 163, 184, 0.12);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #cbd5f5;
+      font-size: 0.75rem;
+    }
+    tbody tr:hover {
+      background: rgba(239, 68, 68, 0.08);
+    }
+    .muted {
+      color: #9ca3af;
+      font-size: 0.9rem;
+    }
+    @media (max-width: 720px) {
+      main {
+        padding: 1.75rem 1rem 3rem;
+        gap: 1.75rem;
+      }
+      .stage {
+        width: 100%;
+        border-radius: 18px;
+      }
+      .meta dl {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Clarity-Style Heatmap</h1>
+      <p class="summary">
+        Last {{ hours }} hour{% if hours != 1 %}s{% endif %} · route <code>{{ route_norm }}</code> · snapshot <code>{{ snapshot_hash }}</code> · viewport <code>{{ vp_bucket }}</code> · grid {{ cols }}×{{ rows }}{% if section %} · section <code>{{ section }}</code>{% endif %}{% if site %} · site <code>{{ site }}</code>{% endif %}
+      </p>
+    </header>
+
+    <div class="stage">
+      <div class="wireframe" aria-label="Wireframe snapshot">
+        <div class="wireframe-content">
+          {{ snapshot_html | safe }}
+        </div>
+      </div>
+      <div class="overlay" aria-hidden="true">
+        <div class="heatmap-grid" style="grid-template-columns: repeat({{ cols }}, 1fr); grid-template-rows: repeat({{ rows }}, 1fr);">
+          {% for row in grid %}
+            {% for alpha in row %}
+              <div class="cell" style="--a: {{ "%.3f"|format(alpha) }}"></div>
+            {% endfor %}
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    {% if cached_routes %}
+    <section class="meta">
+      <h2>Cached Pages</h2>
+      <div class="route-list">
+        {% for item in cached_routes %}
+          <a href="{{ item.url }}" class="route-chip{% if item.active %} is-active{% endif %}">
+            <span class="route-chip__route">{{ item.route }}</span>
+            <span class="route-chip__meta">boxes · {{ item.boxes }}</span>
+            {% if item.captured_at %}
+              <span class="route-chip__meta">{{ item.captured_at }}</span>
+            {% endif %}
+          </a>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="meta">
+      <h2>Dataset</h2>
+      <dl>
+        <div>
+          <dt>Total clicks</dt>
+          <dd>{{ total_count }}</dd>
+        </div>
+        <div>
+          <dt>Peak cell</dt>
+          <dd>{{ max_count }}</dd>
+        </div>
+        <div>
+          <dt>Cache key</dt>
+          <dd><code>{{ snapshot_hash }}</code> · <code>{{ vp_bucket }}</code> · <code>{{ grid_id }}</code> · <code>{{ section or "all" }}</code></dd>
+        </div>
+        <div>
+          <dt>Cache file</dt>
+          <dd><code>{{ cache_path }}</code></dd>
+        </div>
+      </dl>
+      {% if not snapshot_available %}
+        <p class="muted">Visit the page with the Logflow snippet enabled to capture a snapshot. The first load will populate <code>{{ cache_full_path }}</code>.</p>
+      {% endif %}
+    </section>
+
+    <section class="meta">
+      <h2>Top Cells</h2>
+      {% set active_cells = cells | selectattr("count", ">", 0) | sort(attribute="count", reverse=True) | list %}
+      {% if active_cells %}
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">X</th>
+              <th scope="col">Y</th>
+              <th scope="col">Count</th>
+              <th scope="col">Alpha</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for cell in active_cells[:10] %}
+              <tr>
+                <td>{{ cell.x }}</td>
+                <td>{{ cell.y }}</td>
+                <td>{{ cell.count }}</td>
+                <td>{{ "%.3f"|format(cell.alpha) }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="muted">No click activity recorded for the selected filters.</p>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>
