@@ -311,6 +311,14 @@
       ) {
         return;
       }
+      if (
+        trigger === "scroll" &&
+        secondsSinceStart() <= 1 &&
+        metrics.scrollTop === 0 &&
+        depthValue === 0
+      ) {
+        return;
+      }
       send("scroll", {
         trigger: trigger,
         depth: depthValue,
