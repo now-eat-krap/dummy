@@ -96,6 +96,10 @@ async def _write_line(request: Request, line: str, cfg: Dict[str, str]) -> None:
 async def ingest(request: Request) -> Response:
     cfg = _get_influx_config()
 
+    client_host = ""
+    if request.client:
+        client_host = request.client.host or ""
+
     try:
         payload = await request.json()
     except Exception:
@@ -126,6 +130,13 @@ async def ingest(request: Request) -> Response:
     cx = _coerce_int(raw_cx, 0)
     cy = _coerce_int(raw_cy, 0)
     has_coords = raw_cx is not None or raw_cy is not None
+    section = str(event.get("section") or "").strip()
+    element_text = str(event.get("element_text") or "").strip()
+    x_bin_value = event.get("x_bin")
+    y_bin_value = event.get("y_bin")
+    scroll_top = _coerce_int(event.get("scroll_top"), 0) if "scroll_top" in event else None
+    scroll_height = _coerce_int(event.get("scroll_height"), 0) if "scroll_height" in event else None
+    viewport_height = _coerce_int(event.get("viewport_height"), 0) if "viewport_height" in event else None
 
     timestamp_ms = int(time.time() * 1000)
     for key in ("ts", "timestamp"):
@@ -163,10 +174,26 @@ async def ingest(request: Request) -> Response:
         "sec": sec,
         "ts": timestamp_ms,
     }
+    if client_host:
+        payload_data["ip"] = client_host
     if element:
         payload_data["element"] = element
+    if element_text:
+        payload_data["element_text"] = element_text
     if has_coords:
         payload_data["coords"] = {"x": cx, "y": cy}
+    if section:
+        payload_data["section"] = section
+    if x_bin_value is not None:
+        payload_data["x_bin"] = _coerce_int(x_bin_value, 0)
+    if y_bin_value is not None:
+        payload_data["y_bin"] = _coerce_int(y_bin_value, 0)
+    if "scroll_top" in event:
+        payload_data["scroll_top"] = scroll_top or 0
+    if "scroll_height" in event:
+        payload_data["scroll_height"] = scroll_height or 0
+    if "viewport_height" in event:
+        payload_data["viewport_height"] = viewport_height or 0
     event_id = event.get("event_id")
     if isinstance(event_id, str) and event_id:
         payload_data["event_id"] = event_id
@@ -197,7 +224,7 @@ async def ingest(request: Request) -> Response:
     if event_type == "click":
         x_bin = _coerce_int(event.get("x_bin"), -1)
         y_bin = _coerce_int(event.get("y_bin"), -1)
-        section_value = str(event.get("section") or "").strip() or "unspecified"
+        section_value = section or "unspecified"
         if x_bin >= 0 and y_bin >= 0:
             click_fields = [
                 "count=1i",

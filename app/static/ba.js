@@ -12,7 +12,6 @@
       click: script.dataset.click === "true",
       scroll: script.dataset.scroll === "true",
       spa: script.dataset.spa === "true",
-      heartbeat: parseInt(script.dataset.hb || "0", 10),
       xBins: parseBinCount(script.dataset.xbins || script.dataset.gridx, 12),
       yBins: parseBinCount(script.dataset.ybins || script.dataset.gridy, 8),
     };
@@ -27,10 +26,6 @@
 
     if (Math.random() > cfg.sample) {
       return;
-    }
-
-    if (!Number.isInteger(cfg.heartbeat) || cfg.heartbeat < 0) {
-      cfg.heartbeat = 0;
     }
 
     if (!cfg.endpoint.endsWith("/ba")) {
@@ -50,9 +45,14 @@
       pageStart: Date.now(),
       maxDepth: 0,
       lastClickTs: 0,
-      scrollFlushed: false,
       uid: ensureId(window.localStorage, "logflow:uid"),
       sid: ensureId(window.sessionStorage, "logflow:sid"),
+      pointer: {
+        x: Math.round(window.innerWidth ? window.innerWidth / 2 : 0),
+        y: Math.round(window.innerHeight ? window.innerHeight / 2 : 0),
+      },
+      scrollTimer: null,
+      closeSent: false,
     };
 
     capturePage("load");
@@ -77,12 +77,17 @@
           }
           state.lastClickTs = now;
           const target = ev.target;
+          state.pointer = {
+            x: Math.round(ev.clientX || 0),
+            y: Math.round(ev.clientY || 0),
+          };
           const vp = viewport();
           const xBin = toBin(ev.clientX, vp.w, cfg.xBins);
           const yBin = toBin(ev.clientY, vp.h, cfg.yBins);
           const section = resolveSection(target);
           send("click", {
             element: describeTarget(target),
+            element_text: elementText(target),
             depth: Math.round(state.maxDepth),
             coords: {
               x: Math.round(ev.clientX || 0),
@@ -95,76 +100,84 @@
         },
         true
       );
+      window.addEventListener(
+        "pointermove",
+        function (ev) {
+          if (!ev) {
+            return;
+          }
+          state.pointer = {
+            x: Math.round(ev.clientX || 0),
+            y: Math.round(ev.clientY || 0),
+          };
+        },
+        true
+      );
+      window.addEventListener(
+        "mousemove",
+        function (ev) {
+          if (!ev) {
+            return;
+          }
+          state.pointer = {
+            x: Math.round(ev.clientX || 0),
+            y: Math.round(ev.clientY || 0),
+          };
+        },
+        true
+      );
     }
 
     if (cfg.scroll) {
       window.addEventListener(
         "scroll",
         function () {
-          const doc = document.documentElement;
-          const body = document.body;
-          const scrollTop = window.pageYOffset || doc.scrollTop || body.scrollTop || 0;
-          const scrollHeight = Math.max(
-            body.scrollHeight || 0,
-            doc.scrollHeight || 0,
-            body.offsetHeight || 0,
-            doc.offsetHeight || 0,
-            body.clientHeight || 0,
-            doc.clientHeight || 0
-          );
-          const viewport = window.innerHeight || doc.clientHeight || 0;
-          const denominator = scrollHeight - viewport;
-          if (denominator <= 0) {
-            state.maxDepth = 100;
-            return;
+          const metrics = currentScrollMetrics();
+          if (metrics.depth > state.maxDepth) {
+            state.maxDepth = metrics.depth;
           }
-          const depth = Math.min(100, Math.round(((scrollTop + viewport) / scrollHeight) * 100));
-          if (depth > state.maxDepth) {
-            state.maxDepth = depth;
+          if (state.scrollTimer) {
+            window.clearTimeout(state.scrollTimer);
           }
+          state.scrollTimer = window.setTimeout(function () {
+            state.scrollTimer = null;
+            dispatchScroll("scroll");
+          }, 250);
         },
         { passive: true }
       );
 
       document.addEventListener("visibilitychange", function () {
         if (document.visibilityState === "hidden") {
-          flushScroll("visibility");
+          dispatchScroll("visibility");
+          captureClose("visibility");
         }
       });
 
       window.addEventListener("beforeunload", function () {
-        flushScroll("unload");
+        dispatchScroll("unload");
+        captureClose("unload");
       });
-    }
-
-    if (cfg.heartbeat > 0) {
-      const intervalMs = cfg.heartbeat * 1000;
-      window.setInterval(function () {
-        send("heartbeat", { sec: secondsSinceStart() });
-      }, intervalMs);
+    } else {
+      window.addEventListener("beforeunload", function () {
+        captureClose("unload");
+      });
+      document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "hidden") {
+          captureClose("visibility");
+        }
+      });
     }
 
     function capturePage(source) {
       state.pageStart = Date.now();
       state.maxDepth = 0;
-      state.scrollFlushed = false;
+      state.closeSent = false;
       send("page", { source: source, depth: 0, sec: 0 });
     }
 
     function secondsSinceStart() {
       return Math.max(0, Math.round((Date.now() - state.pageStart) / 1000));
-    }
-
-    function flushScroll(trigger) {
-      if (state.scrollFlushed) {
-        return;
-      }
-      state.scrollFlushed = true;
-      send("scroll", {
-        trigger: trigger,
-        depth: Math.round(state.maxDepth),
-        sec: secondsSinceStart(),
-      });
     }
 
     function ensureId(storage, key) {
@@ -239,6 +252,73 @@
       };
     }
 
+    function currentScrollMetrics() {
+      const doc = document.documentElement;
+      const body = document.body;
+      const scrollTop = window.pageYOffset || doc.scrollTop || body.scrollTop || 0;
+      const scrollHeight = Math.max(
+        body.scrollHeight || 0,
+        doc.scrollHeight || 0,
+        body.offsetHeight || 0,
+        doc.offsetHeight || 0,
+        body.clientHeight || 0,
+        doc.clientHeight || 0
+      );
+      const viewportHeight = window.innerHeight || doc.clientHeight || 0;
+      const denominator = scrollHeight - viewportHeight;
+      let depth = 0;
+      if (denominator <= 0) {
+        depth = 100;
+      } else {
+        depth = Math.min(100, Math.round(((scrollTop + viewportHeight) / scrollHeight) * 100));
+      }
+      return {
+        scrollTop: Math.round(scrollTop),
+        scrollHeight: Math.round(scrollHeight),
+        viewportHeight: Math.round(viewportHeight),
+        depth: depth,
+      };
+    }
+
+    function pointerCoords() {
+      return {
+        x: state.pointer.x === null ? null : Math.round(state.pointer.x),
+        y: state.pointer.y === null ? null : Math.round(state.pointer.y),
+      };
+    }
+
+    function dispatchScroll(trigger) {
+      const metrics = currentScrollMetrics();
+      const depthValue = Math.max(state.maxDepth, metrics.depth);
+      state.maxDepth = depthValue;
+      send("scroll", {
+        trigger: trigger,
+        depth: depthValue,
+        sec: secondsSinceStart(),
+        coords: {
+          x: 0,
+          y: metrics.scrollTop,
+        },
+        scroll_top: metrics.scrollTop,
+        scroll_height: metrics.scrollHeight,
+        viewport_height: metrics.viewportHeight,
+      });
+    }
+
+    function captureClose(trigger) {
+      if (state.closeSent) {
+        return;
+      }
+      state.closeSent = true;
+      const coords = pointerCoords();
+      send("close", {
+        trigger: trigger,
+        depth: Math.round(state.maxDepth),
+        sec: secondsSinceStart(),
+        coords: coords,
+      });
+    }
+
     function send(type, extra) {
       const payload = Object.assign(
         {
@@ -260,7 +340,9 @@
       );
 
       try {
-        console.debug("logflow →", endpoint, payload);
+        if (window.console && typeof window.console.debug === "function") {
+          window.console.debug("logflow ->", endpoint, payload);
+        }
       } catch (_) {
         // ignore logging errors
       }
@@ -324,6 +406,14 @@
         }
       }
       return "";
+    }
+
+    function elementText(target) {
+      if (!target || !target.textContent) {
+        return "";
+      }
+      const text = target.textContent.trim();
+      return text.slice(0, 120);
     }
   } catch (err) {
     if (window && window.console && window.console.debug) {

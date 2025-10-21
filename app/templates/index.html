@@ -105,13 +105,14 @@
           <tr>
             <th scope="col">Time</th>
             <th scope="col">Type</th>
+            <th scope="col">User</th>
             <th scope="col">Route</th>
             <th scope="col">Details</th>
           </tr>
         </thead>
         <tbody id="events-body">
           <tr>
-            <td colspan="4" class="muted">Waiting for events...</td>
+            <td colspan="5" class="muted">Waiting for events...</td>
           </tr>
         </tbody>
       </table>
@@ -187,7 +188,7 @@
           const data = await res.json();
           const events = Array.isArray(data.events) ? data.events : [];
           if (!events.length) {
-            body.innerHTML = '<tr><td colspan="4" class="muted">No events for this range.</td></tr>';
+            body.innerHTML = '<tr><td colspan="5" class="muted">No events for this range.</td></tr>';
             return;
           }
           body.innerHTML = events
@@ -196,9 +197,19 @@
               const payload = item.payload || {};
               const type = (item.type || payload.type || "event").toString().toUpperCase();
               const route = item.route || payload.route || "/";
+              const user = formatUser(payload);
               const detailParts = [];
+              if (payload.ip) {
+                detailParts.push("user: " + escapeHtml(payload.ip));
+              }
               if (payload.element) {
                 detailParts.push("element: " + escapeHtml(payload.element));
+              }
+              if (payload.element_text) {
+                detailParts.push('text: "' + escapeHtml(payload.element_text) + '"');
+              }
+              if (payload.section) {
+                detailParts.push("section: " + escapeHtml(payload.section));
               }
               if (payload.coords && typeof payload.coords === "object") {
                 const coordBits = [];
@@ -211,6 +222,9 @@
                 if (coordBits.length) {
                   detailParts.push("coords: " + coordBits.join(" "));
                 }
+              }
+              if (Object.prototype.hasOwnProperty.call(payload, "scroll_top")) {
+                detailParts.push("scrollTop: " + payload.scroll_top);
               }
               if (payload.depth !== undefined) {
                 detailParts.push("depth: " + payload.depth);
@@ -226,6 +240,7 @@
                 "<tr>" +
                 "<td>" + escapeHtml(when) + "</td>" +
                 "<td>" + escapeHtml(type) + "</td>" +
+                "<td>" + escapeHtml(user) + "</td>" +
                 "<td>" + escapeHtml(route) + "</td>" +
                 "<td>" + detail + "</td>" +
                 "</tr>"
@@ -233,7 +248,7 @@
             })
             .join("");
         } catch (err) {
-          body.innerHTML = '<tr><td colspan="4" class="muted">Failed to load events.</td></tr>';
+          body.innerHTML = '<tr><td colspan="5" class="muted">Failed to load events.</td></tr>';
           console.debug(err);
         }
       }
@@ -255,6 +270,23 @@
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;");
+      }
+
+      function formatUser(payload) {
+        if (!payload || typeof payload !== "object") {
+          return "-";
+        }
+        const parts = [];
+        if (payload.ip) {
+          parts.push(payload.ip);
+        }
+        if (payload.uid) {
+          parts.push("uid:" + String(payload.uid).slice(0, 8));
+        }
+        if (!payload.ip && payload.sid) {
+          parts.push("sid:" + String(payload.sid).slice(0, 8));
+        }
+        return parts.length ? parts.join(" · ") : "-";
       }
     })();
   </script>
