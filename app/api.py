@@ -102,6 +102,7 @@ async def summary(
         f'from(bucket: "{_escape_flux(cfg["bucket"])}")\n'
         f"  |> range(start: -{hours}h)\n"
         '  |> filter(fn: (r) => r._measurement == "logflow" and r._field == "count")\n'
+        '  |> filter(fn: (r) => (not exists r.t) or r.t != "heartbeat")\n'
         f"{_site_filter(site)}"
         "  |> group(columns: [])\n"
         "  |> sum()\n"
@@ -172,6 +173,7 @@ async def series(
         f'from(bucket: "{_escape_flux(cfg["bucket"])}")\n'
         f"  |> range(start: -{hours}h)\n"
         '  |> filter(fn: (r) => r._measurement == "logflow" and r._field == "count")\n'
+        '  |> filter(fn: (r) => (not exists r.t) or r.t != "heartbeat")\n'
         f"{_site_filter(site)}"
         f"  |> aggregateWindow(every: {bucket}, fn: sum, createEmpty: false)\n"
         "  |> group(columns: [])\n"
@@ -204,6 +206,7 @@ async def recent_events(
         f'from(bucket: "{_escape_flux(cfg["bucket"])}")\n'
         f"  |> range(start: -{hours}h)\n"
         '  |> filter(fn: (r) => r._measurement == "logflow" and r._field == "payload")\n'
+        '  |> filter(fn: (r) => (not exists r.t) or r.t != "heartbeat")\n'
         f"{_site_filter(site)}"
         '  |> sort(columns: ["_time"], desc: true)\n'
         f"  |> limit(n: {limit})\n"
