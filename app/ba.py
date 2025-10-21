@@ -184,7 +184,6 @@ async def ingest(request: Request) -> Response:
         fields.append(f'payload="{_escape_field(payload_json)}"')
     except (TypeError, ValueError):
         pass
-
     line = (
         f"logflow,site={_escape_tag(site)},t={_escape_tag(event_type)},route={_escape_tag(route)} "
         f"{','.join(fields)} {timestamp_ms}"
@@ -194,5 +193,27 @@ async def ingest(request: Request) -> Response:
         await _write_line(request, line, cfg)
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Unexpected error writing analytics event: %s", exc)
+
+    if event_type == "click":
+        x_bin = _coerce_int(event.get("x_bin"), -1)
+        y_bin = _coerce_int(event.get("y_bin"), -1)
+        section_value = str(event.get("section") or "").strip() or "unspecified"
+        if x_bin >= 0 and y_bin >= 0:
+            click_fields = [
+                "count=1i",
+                f"x_bin={x_bin}i",
+                f"y_bin={y_bin}i",
+            ]
+            click_line = (
+                "logflow_click,"
+                f"site={_escape_tag(site)},"
+                f"route={_escape_tag(route)},"
+                f"section={_escape_tag(section_value)} "
+                f"{','.join(click_fields)} {timestamp_ms}"
+            )
+            try:
+                await _write_line(request, click_line, cfg)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Unexpected error writing click analytics event: %s", exc)
 
     return Response(status_code=204)

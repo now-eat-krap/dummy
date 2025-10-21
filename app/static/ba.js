@@ -13,6 +13,8 @@
       scroll: script.dataset.scroll === "true",
       spa: script.dataset.spa === "true",
       heartbeat: parseInt(script.dataset.hb || "0", 10),
+      xBins: parseBinCount(script.dataset.xbins || script.dataset.gridx, 12),
+      yBins: parseBinCount(script.dataset.ybins || script.dataset.gridy, 8),
     };
 
     if (!cfg.site || !cfg.endpoint) {
@@ -75,6 +77,10 @@
           }
           state.lastClickTs = now;
           const target = ev.target;
+          const vp = viewport();
+          const xBin = toBin(ev.clientX, vp.w, cfg.xBins);
+          const yBin = toBin(ev.clientY, vp.h, cfg.yBins);
+          const section = resolveSection(target);
           send("click", {
             element: describeTarget(target),
             depth: Math.round(state.maxDepth),
@@ -82,6 +88,9 @@
               x: Math.round(ev.clientX || 0),
               y: Math.round(ev.clientY || 0),
             },
+            x_bin: xBin,
+            y_bin: yBin,
+            section: section,
           });
         },
         true
@@ -277,6 +286,44 @@
       }).catch(function () {
         // swallow network errors
       });
+    }
+
+    function parseBinCount(raw, fallback) {
+      const value = parseInt(raw || "", 10);
+      if (!Number.isInteger(value) || value <= 0) {
+        return fallback;
+      }
+      return value;
+    }
+
+    function toBin(coord, size, bins) {
+      if (!Number.isFinite(coord) || !Number.isFinite(size) || size <= 0 || bins <= 0) {
+        return null;
+      }
+      let ratio = coord / size;
+      if (!Number.isFinite(ratio)) {
+        return null;
+      }
+      ratio = Math.min(Math.max(ratio, 0), 1);
+      let index = Math.floor(ratio * bins);
+      if (index >= bins) {
+        index = bins - 1;
+      }
+      return index;
+    }
+
+    function resolveSection(target) {
+      if (!target || typeof target !== "object") {
+        return "";
+      }
+      const el = target.closest ? target.closest("[data-section]") : null;
+      if (el && el.getAttribute) {
+        const value = el.getAttribute("data-section");
+        if (value) {
+          return value.slice(0, 64);
+        }
+      }
+      return "";
     }
   } catch (err) {
     if (window && window.console && window.console.debug) {
