@@ -110,7 +110,10 @@ async def ingest(request: Request) -> Response:
 
     event = payload
     site = str(event.get("site") or "default").strip() or "default"
-    event_type = str(event.get("type") or "event").strip() or "event"
+    raw_event_type = str(event.get("type") or "event").strip()
+    event_type = raw_event_type or "event"
+    if event_type.lower() == "heartbeat":
+        return Response(status_code=204)
     route = _normalize_route(event.get("route") or event.get("path") or event.get("url"))
 
     depth = _coerce_int(event.get("depth"), 0)
