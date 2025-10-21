@@ -53,6 +53,8 @@
       },
       scrollTimer: null,
       closeSent: false,
+      lastPageUrl: "",
+      lastPageSentAt: 0,
     };
 
     capturePage("load");
@@ -170,7 +172,17 @@
     }
 
     function capturePage(source) {
-      state.pageStart = Date.now();
+      const now = Date.now();
+      const currentUrl = window.location.href || "";
+      if (state.lastPageUrl === currentUrl && now - state.lastPageSentAt < 500) {
+        state.pageStart = now;
+        state.maxDepth = 0;
+        state.closeSent = false;
+        return;
+      }
+      state.lastPageUrl = currentUrl;
+      state.lastPageSentAt = now;
+      state.pageStart = now;
       state.maxDepth = 0;
       state.closeSent = false;
       send("page", { source: source, depth: 0, sec: 0 });
@@ -291,6 +303,14 @@
       const metrics = currentScrollMetrics();
       const depthValue = Math.max(state.maxDepth, metrics.depth);
       state.maxDepth = depthValue;
+      if (
+        trigger === "visibility" &&
+        secondsSinceStart() <= 1 &&
+        metrics.scrollTop === 0 &&
+        depthValue === 0
+      ) {
+        return;
+      }
       send("scroll", {
         trigger: trigger,
         depth: depthValue,
