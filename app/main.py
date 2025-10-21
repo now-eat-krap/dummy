@@ -1,23 +1,27 @@
+import hashlib
 import logging
 import os
 from contextlib import asynccontextmanager
+from html import escape
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .api import _parse_flux_csv, router as api_router
-from .ba import _get_influx_config, router as ba_router
+from .api import _escape_flux, _parse_flux_csv, router as api_router
+from .ba import _get_influx_config, _normalize_route, router as ba_router
 
 BASE_DIR = Path(__file__).resolve().parent
 BA_JS_PATH = BASE_DIR / "static" / "ba.js"
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 logger = logging.getLogger("uvicorn.error")
+HEATMAP_CACHE_DIR = Path(os.getenv("HEATMAP_CACHE_DIR", str(BASE_DIR / "heatmap_cache"))).expanduser()
+HEATMAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _parse_origins(raw: str) -> List[str]:
@@ -95,23 +99,124 @@ async def snippet() -> FileResponse:
 
 
 @app.get("/heatmap", response_class=HTMLResponse)
-async def heatmap(request: Request) -> HTMLResponse:
-    grid, max_count = await _build_heatmap_grid(request)
+async def heatmap(
+    request: Request,
+    route: str = Query("/", description="Route path to inspect"),
+    snapshot: str = Query("default", description="Snapshot hash identifier"),
+    vp: str = Query("", description="Viewport bucket identifier"),
+    grid: Optional[str] = Query(None, description="Grid identifier, e.g. 12x8"),
+    section: Optional[str] = Query(None, description="Section label"),
+    site: Optional[str] = Query(None, description="Site identifier"),
+    hours: int = Query(HEATMAP_LOOKBACK_HOURS, ge=1, le=168, description="Lookback window in hours"),
+) -> HTMLResponse:
+    route_norm = _normalize_route(route or "/")
+    cols, rows, grid_id = _parse_grid_identifier(grid, HEATMAP_COLS, HEATMAP_ROWS)
+
+    snapshot_param = (snapshot or "").strip()
+    snapshot_hash = snapshot_param or "default"
+    snapshot_filter = None if snapshot_hash.lower() in {"*", "all", "any"} else snapshot_hash
+
+    vp_param = (vp or "").strip()
+    vp_filter = None if vp_param.lower() in {"", "*", "any"} else vp_param
+
+    section_param = (section or "").strip()
+    section_filter = None if section_param.lower() in {"", "*", "all", "__all__"} else section_param
+
+    site_param = (site or "").strip()
+
+    heatmap_data = await _build_heatmap_grid(
+        request,
+        hours=hours,
+        site=site_param or None,
+        route_norm=route_norm,
+        snapshot_hash=snapshot_filter,
+        vp_bucket=vp_filter,
+        grid_id=grid_id,
+        cols=cols,
+        rows=rows,
+        section=section_filter,
+    )
+
+    cache_snapshot_key = snapshot_hash if snapshot_filter else (snapshot_hash or "all")
+    cache_vp_key = vp_param if vp_filter else "any"
+    cache_section_key = section_param if section_filter else "all"
+
+    snapshot_html, etag, cache_path = _load_snapshot_html(
+        route_norm=route_norm,
+        snapshot_hash=cache_snapshot_key,
+        vp_bucket=cache_vp_key,
+        grid_id=grid_id,
+        section=cache_section_key,
+    )
+
+    try:
+        cache_rel = cache_path.relative_to(HEATMAP_CACHE_DIR)
+    except ValueError:
+        cache_rel = cache_path
+
     context = {
         "request": request,
-        "grid": grid,
-        "cols": HEATMAP_COLS,
-        "rows": HEATMAP_ROWS,
-        "hours": HEATMAP_LOOKBACK_HOURS,
-        "max_count": max_count,
+        "grid": heatmap_data["grid"],
+        "raw_grid": heatmap_data["raw"],
+        "cells": heatmap_data["cells"],
+        "cols": cols,
+        "rows": rows,
+        "hours": hours,
+        "max_count": heatmap_data["max_count"],
+        "total_count": heatmap_data["total_count"],
+        "route_norm": route_norm,
+        "snapshot_hash": snapshot_hash,
+        "vp_bucket": cache_vp_key,
+        "grid_id": grid_id,
+        "section": section_param or "",
+        "site": site_param,
+        "snapshot_html": snapshot_html,
+        "snapshot_available": etag is not None,
+        "cache_path": str(cache_rel),
+        "cache_full_path": str(cache_path),
+        "filters": {
+            "site": site_param or "",
+            "route": route_norm,
+            "snapshot": snapshot_hash,
+            "vp": vp_param,
+            "grid": grid_id,
+            "section": section_param or "",
+            "hours": hours,
+        },
     }
-    return templates.TemplateResponse("heatmap.html", context)
+    response = templates.TemplateResponse("heatmap.html", context)
+    if etag:
+        response.headers["ETag"] = etag
+    return response
 
 
-async def _build_heatmap_grid(request: Request) -> tuple[list[list[float]], int]:
-    raw_rows = await _fetch_heatmap_rows(request)
-    grid = [[0 for _ in range(HEATMAP_COLS)] for _ in range(HEATMAP_ROWS)]
+async def _build_heatmap_grid(
+    request: Request,
+    *,
+    hours: int,
+    site: Optional[str],
+    route_norm: str,
+    snapshot_hash: Optional[str],
+    vp_bucket: Optional[str],
+    grid_id: str,
+    cols: int,
+    rows: int,
+    section: Optional[str],
+) -> Dict[str, Any]:
+    raw_rows = await _fetch_heatmap_rows(
+        request,
+        hours=hours,
+        site=site,
+        route_norm=route_norm,
+        snapshot_hash=snapshot_hash,
+        vp_bucket=vp_bucket,
+        grid_id=grid_id,
+        section=section,
+    )
+    raw_grid = [[0 for _ in range(cols)] for _ in range(rows)]
     max_count = 0
+    total_count = 0
+
     for entry in raw_rows:
         x_value = entry.get("x_bin")
         y_value = entry.get("y_bin")
@@ -119,37 +224,79 @@ async def _build_heatmap_grid(request: Request) -> tuple[list[list[float]], int]
         try:
             x_idx = int(float(x_value))
             y_idx = int(float(y_value))
-        except (TypeError, ValueError):
-            continue
-        if not (0 <= x_idx < HEATMAP_COLS and 0 <= y_idx < HEATMAP_ROWS):
-            continue
-        try:
             count = int(float(count_value))
         except (TypeError, ValueError):
             continue
-        grid[y_idx][x_idx] += count
-        if grid[y_idx][x_idx] > max_count:
-            max_count = grid[y_idx][x_idx]
+        if not (0 <= x_idx < cols and 0 <= y_idx < rows):
+            continue
+        raw_grid[y_idx][x_idx] += count
+        total_count += count
+        if raw_grid[y_idx][x_idx] > max_count:
+            max_count = raw_grid[y_idx][x_idx]
 
     if max_count > 0:
-        for y in range(HEATMAP_ROWS):
-            for x in range(HEATMAP_COLS):
-                grid[y][x] = grid[y][x] / max_count
+        normalized_grid = [
+            [raw_grid[y][x] / max_count for x in range(cols)] for y in range(rows)
+        ]
     else:
-        for y in range(HEATMAP_ROWS):
-            for x in range(HEATMAP_COLS):
-                grid[y][x] = 0.0
-    return grid, max_count
+        normalized_grid = [[0.0 for _ in range(cols)] for _ in range(rows)]
+
+    cells: List[Dict[str, float]] = []
+    for y in range(rows):
+        for x in range(cols):
+            count = raw_grid[y][x]
+            alpha = (count / max_count) if max_count else 0.0
+            cells.append(
+                {
+                    "x": x,
+                    "y": y,
+                    "count": count,
+                    "alpha": round(alpha, 4) if alpha else 0.0,
+                }
+            )
+
+    return {
+        "grid": normalized_grid,
+        "raw": raw_grid,
+        "max_count": max_count,
+        "total_count": total_count,
+        "cells": cells,
+    }
 
 
-async def _fetch_heatmap_rows(request: Request) -> List[Dict[str, str]]:
+async def _fetch_heatmap_rows(
+    request: Request,
+    *,
+    hours: int,
+    site: Optional[str],
+    route_norm: str,
+    snapshot_hash: Optional[str],
+    vp_bucket: Optional[str],
+    grid_id: str,
+    section: Optional[str],
+) -> List[Dict[str, str]]:
     cfg = _get_influx_config()
+    filters = ['  |> filter(fn: (r) => r["_measurement"] == "logflow_click")']
+    if site:
+        filters.append(f'  |> filter(fn: (r) => r["site"] == "{_escape_flux(site)}")')
+    if route_norm:
+        filters.append(f'  |> filter(fn: (r) => r["route_norm"] == "{_escape_flux(route_norm)}")')
+    if snapshot_hash:
+        filters.append(f'  |> filter(fn: (r) => r["snapshot"] == "{_escape_flux(snapshot_hash)}")')
+    if grid_id:
+        filters.append(f'  |> filter(fn: (r) => r["grid"] == "{_escape_flux(grid_id)}")')
+    if vp_bucket:
+        filters.append(f'  |> filter(fn: (r) => r["vp"] == "{_escape_flux(vp_bucket)}")')
+    if section:
+        filters.append(f'  |> filter(fn: (r) => r["section"] == "{_escape_flux(section)}")')
+
+    filters_str = "\n".join(filters)
     query = (
-        f'from(bucket: "{cfg["bucket"]}")\n'
-        f"  |> range(start: -{HEATMAP_LOOKBACK_HOURS}h)\n"
-        '  |> filter(fn: (r) => r["_measurement"] == "logflow_click")\n'
-        '  |> pivot(rowKey: ["_time", "site", "route", "section"], columnKey: ["_field"], valueColumn: "_value")\n'
-        '  |> keep(columns: ["_time", "site", "route", "section", "count", "x_bin", "y_bin"])\n'
+        f'from(bucket: "{_escape_flux(cfg["bucket"])}")\n'
+        f"  |> range(start: -{hours}h)\n"
+        f"{filters_str}\n"
+        '  |> pivot(rowKey: ["_time", "site", "route", "route_norm", "section", "snapshot", "grid", "vp"], columnKey: ["_field"], valueColumn: "_value")\n'
+        '  |> keep(columns: ["_time", "site", "route", "route_norm", "section", "snapshot", "grid", "vp", "count", "x_bin", "y_bin"])\n'
         '  |> group(columns: ["x_bin", "y_bin"])\n'
         '  |> sum(column: "count")\n'
     )
@@ -189,3 +336,90 @@ async def _query_flux(request: Request, query: str, cfg: Dict[str, str]) -> List
         return []
 
     return _parse_flux_csv(response.text)
+
+
+def _parse_grid_identifier(grid_id: Optional[str], default_cols: int, default_rows: int) -> Tuple[int, int, str]:
+    if grid_id:
+        token = grid_id.lower().replace(" ", "").replace("*", "x")
+        parts = token.split("x")
+        if len(parts) == 2:
+            try:
+                cols = max(1, int(parts[0]))
+                rows = max(1, int(parts[1]))
+                return cols, rows, f"{cols}x{rows}"
+            except ValueError:
+                pass
+    return default_cols, default_rows, f"{default_cols}x{default_rows}"
+
+
+def _safe_cache_segment(value: str) -> str:
+    text = (value or "default").strip()
+    if not text:
+        text = "default"
+    text = text.replace("\\", "/")
+    tokens: List[str] = []
+    for ch in text:
+        if ch.isalnum() or ch in {"-", "_", "."}:
+            tokens.append(ch)
+        elif ch == "/":
+            tokens.append("__")
+        else:
+            tokens.append("_")
+    cleaned = "".join(tokens).strip("_")
+    if not cleaned:
+        cleaned = "default"
+    return cleaned[:80]
+
+
+def _snapshot_cache_path(route_norm: str, snapshot_hash: str, vp_bucket: str, grid_id: str, section: str) -> Path:
+    route_parts = [part for part in route_norm.split("/") if part]
+    if not route_parts:
+        route_parts = ["root"]
+    safe_route = [_safe_cache_segment(part) for part in route_parts]
+    parts = [
+        _safe_cache_segment(snapshot_hash or "default"),
+        *safe_route,
+        _safe_cache_segment(vp_bucket or "any"),
+        _safe_cache_segment(grid_id or "grid"),
+        _safe_cache_segment(section or "all"),
+    ]
+    return HEATMAP_CACHE_DIR.joinpath(*parts, "index.html")
+
+
+def _load_snapshot_html(
+    route_norm: str,
+    snapshot_hash: str,
+    vp_bucket: str,
+    grid_id: str,
+    section: str,
+) -> Tuple[str, Optional[str], Path]:
+    cache_path = _snapshot_cache_path(route_norm, snapshot_hash, vp_bucket, grid_id, section)
+    if cache_path.exists():
+        content = cache_path.read_text(encoding="utf-8")
+        etag = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        return content, etag, cache_path
+    placeholder = _fallback_snapshot_html(route_norm, snapshot_hash, vp_bucket, grid_id, section, cache_path)
+    return placeholder, None, cache_path
+
+
+def _fallback_snapshot_html(
+    route_norm: str,
+    snapshot_hash: str,
+    vp_bucket: str,
+    grid_id: str,
+    section: str,
+    expected_path: Path,
+) -> str:
+    safe_route = escape(route_norm or "/")
+    safe_snapshot = escape(snapshot_hash or "default")
+    safe_vp = escape(vp_bucket or "any")
+    safe_grid = escape(grid_id or "")
+    safe_section = escape(section or "all")
+    safe_path = escape(str(expected_path))
+    return (
+        '<div class="heatmap-placeholder">'
+        f'<p>No cached snapshot available for <code>{safe_route}</code>.</p>'
+        f'<p>Expected cache file: <code>{safe_path}</code></p>'
+        f'<p>Key: snapshot={safe_snapshot}, viewport={safe_vp}, grid={safe_grid}, section={safe_section}</p>'
+        "</div>"
+    )

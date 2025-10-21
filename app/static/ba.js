@@ -15,6 +15,11 @@
       xBins: parseBinCount(script.dataset.xbins || script.dataset.gridx, 12),
       yBins: parseBinCount(script.dataset.ybins || script.dataset.gridy, 8),
     };
+    cfg.snapshotHash = (script.dataset.snapshot || "").trim() || "default";
+    cfg.gridId = (script.dataset.grid || "").trim();
+    if (!cfg.gridId) {
+      cfg.gridId = cfg.xBins + "x" + cfg.yBins;
+    }
 
     if (!cfg.site || !cfg.endpoint) {
       return;
@@ -50,11 +55,14 @@
       pointer: {
         x: Math.round(window.innerWidth ? window.innerWidth / 2 : 0),
         y: Math.round(window.innerHeight ? window.innerHeight / 2 : 0),
+        pageX: Math.round((window.pageXOffset || 0) + (window.innerWidth ? window.innerWidth / 2 : 0)),
+        pageY: Math.round((window.pageYOffset || 0) + (window.innerHeight ? window.innerHeight / 2 : 0)),
       },
       scrollTimer: null,
       closeSent: false,
       lastPageUrl: "",
       lastPageSentAt: 0,
+      routeNorm: normalizeRoute(window.location.pathname || "/"),
     };
 
     capturePage("load");
@@ -82,14 +90,19 @@
           state.pointer = {
             x: Math.round(ev.clientX || 0),
             y: Math.round(ev.clientY || 0),
+            pageX: Math.round(ev.pageX || ev.clientX || 0),
+            pageY: Math.round(ev.pageY || ev.clientY || 0),
           };
           const vp = viewport();
           const xBin = toBin(ev.clientX, vp.w, cfg.xBins);
           const yBin = toBin(ev.clientY, vp.h, cfg.yBins);
           const section = resolveSection(target);
+          const docMetrics = documentMetrics();
+          const docPos = relativeDocumentPosition(state.pointer.pageX, state.pointer.pageY, docMetrics);
           send("click", {
             element: describeTarget(target),
             element_text: elementText(target),
+            el_hash: elementHash(target),
             depth: Math.round(state.maxDepth),
             coords: {
               x: Math.round(ev.clientX || 0),
@@ -98,6 +111,10 @@
             x_bin: xBin,
             y_bin: yBin,
             section: section,
+            doc_x: docPos.x,
+            doc_y: docPos.y,
+            doc_w: docMetrics.width,
+            doc_h: docMetrics.height,
           });
         },
         true
@@ -111,6 +128,8 @@
           state.pointer = {
             x: Math.round(ev.clientX || 0),
             y: Math.round(ev.clientY || 0),
+            pageX: Math.round(ev.pageX || ev.clientX || 0),
+            pageY: Math.round(ev.pageY || ev.clientY || 0),
           };
         },
         true
@@ -124,6 +143,8 @@
           state.pointer = {
             x: Math.round(ev.clientX || 0),
             y: Math.round(ev.clientY || 0),
+            pageX: Math.round(ev.pageX || ev.clientX || 0),
+            pageY: Math.round(ev.pageY || ev.clientY || 0),
           };
         },
         true
@@ -185,6 +206,7 @@
       state.pageStart = now;
       state.maxDepth = 0;
       state.closeSent = false;
+      state.routeNorm = normalizeRoute(window.location.pathname || "/");
       send("page", { source: source, depth: 0, sec: 0 });
     }
 
@@ -292,10 +314,137 @@
       };
     }
 
+    function documentMetrics() {
+      const doc = document.documentElement;
+      const body = document.body;
+      const width = Math.max(
+        doc ? doc.scrollWidth || 0 : 0,
+        body ? body.scrollWidth || 0 : 0,
+        doc ? doc.clientWidth || 0 : 0,
+        body ? body.clientWidth || 0 : 0
+      );
+      const height = Math.max(
+        doc ? doc.scrollHeight || 0 : 0,
+        body ? body.scrollHeight || 0 : 0,
+        doc ? doc.clientHeight || 0 : 0,
+        body ? body.clientHeight || 0 : 0
+      );
+      return {
+        width: Math.max(1, Math.round(width)),
+        height: Math.max(1, Math.round(height)),
+      };
+    }
+
+    function relativeDocumentPosition(pageX, pageY, metrics) {
+      const dims = metrics || documentMetrics();
+      if (pageX == null || pageY == null) {
+        return { x: null, y: null };
+      }
+      const xRatio = clamp(pageX / dims.width, 0, 1);
+      const yRatio = clamp(pageY / dims.height, 0, 1);
+      return {
+        x: Number.isFinite(xRatio) ? Number(xRatio.toFixed(4)) : null,
+        y: Number.isFinite(yRatio) ? Number(yRatio.toFixed(4)) : null,
+      };
+    }
+
+    function viewportBucket(vp) {
+      const bucketSize = 120;
+      const width = vp && Number.isFinite(vp.w) ? Math.max(0, vp.w) : 0;
+      const height = vp && Number.isFinite(vp.h) ? Math.max(0, vp.h) : 0;
+      const bucketW = Math.round(width / bucketSize) * bucketSize || Math.round(width || 0);
+      const bucketH = Math.round(height / bucketSize) * bucketSize || Math.round(height || 0);
+      return "vp-" + bucketW + "x" + bucketH;
+    }
+
+    function normalizeRoute(raw) {
+      if (!raw) {
+        return "/";
+      }
+      let path = String(raw).split("#", 1)[0].split("?", 1)[0];
+      if (!path.startsWith("/")) {
+        path = "/" + path;
+      }
+      path = path.replace(/\/([0-9]+|[0-9a-fA-F]{12,})(?=\/|$)/g, "/:id");
+      if (path.length > 1) {
+        path = path.replace(/\/+$/, "");
+      }
+      return path || "/";
+    }
+
+    function clamp(value, min, max) {
+      if (!Number.isFinite(value)) {
+        return min;
+      }
+      return Math.min(Math.max(value, min), max);
+    }
+
+    function elementHash(target) {
+      if (!target || typeof target !== "object") {
+        return "";
+      }
+      try {
+        const segments = [];
+        let node = target;
+        let depth = 0;
+        while (node && node !== document && depth < 6) {
+          const tag = (node.tagName || "node").toLowerCase();
+          let descriptor = tag;
+          if (node.id) {
+            descriptor += "#" + String(node.id).slice(0, 48);
+          } else if (node.classList && node.classList.length) {
+            descriptor += "." + Array.from(node.classList)
+              .slice(0, 3)
+              .map(function (cls) {
+                return cls.slice(0, 24);
+              })
+              .join(".");
+          }
+          const siblingIndex = siblingPosition(node);
+          descriptor += ":" + siblingIndex;
+          segments.push(descriptor);
+          node = node.parentElement;
+          depth += 1;
+        }
+        if (!segments.length) {
+          return "";
+        }
+        const raw = segments.join(">");
+        return "el_" + simpleHash(raw);
+      } catch (_) {
+        return "";
+      }
+    }
+
+    function siblingPosition(node) {
+      if (!node || !node.parentElement) {
+        return 0;
+      }
+      let index = 0;
+      let current = node;
+      while (current.previousElementSibling) {
+        index += 1;
+        current = current.previousElementSibling;
+      }
+      return index;
+    }
+
+    function simpleHash(input) {
+      let hash = 0;
+      const text = String(input);
+      for (let i = 0; i < text.length; i += 1) {
+        hash = (hash << 5) - hash + text.charCodeAt(i);
+        hash |= 0;
+      }
+      return Math.abs(hash).toString(16);
+    }
+
     function pointerCoords() {
       return {
         x: state.pointer.x === null ? null : Math.round(state.pointer.x),
         y: state.pointer.y === null ? null : Math.round(state.pointer.y),
+        pageX: state.pointer.pageX === null ? null : Math.round(state.pointer.pageX),
+        pageY: state.pointer.pageY === null ? null : Math.round(state.pointer.pageY),
       };
     }
 
@@ -319,6 +468,8 @@
       ) {
         return;
       }
+      const docMetrics = documentMetrics();
+      const docRatio = metrics.scrollHeight > 0 ? clamp(metrics.scrollTop / metrics.scrollHeight, 0, 1) : 0;
       send("scroll", {
         trigger: trigger,
         depth: depthValue,
@@ -330,6 +481,9 @@
         scroll_top: metrics.scrollTop,
         scroll_height: metrics.scrollHeight,
         viewport_height: metrics.viewportHeight,
+        doc_y: docRatio,
+        doc_w: docMetrics.width,
+        doc_h: docMetrics.height,
       });
     }
 
@@ -339,15 +493,26 @@
       }
       state.closeSent = true;
       const coords = pointerCoords();
+      const docMetrics = documentMetrics();
+      const docPos = relativeDocumentPosition(
+        state.pointer.pageX == null ? 0 : state.pointer.pageX,
+        state.pointer.pageY == null ? 0 : state.pointer.pageY,
+        docMetrics
+      );
       send("close", {
         trigger: trigger,
         depth: Math.round(state.maxDepth),
         sec: secondsSinceStart(),
         coords: coords,
+        doc_x: docPos.x,
+        doc_y: docPos.y,
+        doc_w: docMetrics.width,
+        doc_h: docMetrics.height,
       });
     }
 
     function send(type, extra) {
+      const vpData = viewport();
       const payload = Object.assign(
         {
           site: cfg.site,
@@ -359,7 +524,11 @@
           title: document.title || "",
           uid: state.uid,
           sid: state.sid,
-          vp: viewport(),
+          route_norm: state.routeNorm,
+          snapshot_hash: cfg.snapshotHash,
+          grid_id: cfg.gridId,
+          vp_bucket: viewportBucket(vpData),
+          vp: vpData,
           depth: Math.round(state.maxDepth),
           sec: secondsSinceStart(),
           ts: Date.now(),
