@@ -26,6 +26,14 @@ def _parse_origins(raw: str) -> List[str]:
     return [origin for origin in values if origin]
 
 
+def _parse_bool_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    return lowered in {"1", "true", "yes", "on"}
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     client = httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=2.0))
@@ -39,10 +47,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 allow_origins = _parse_origins(os.getenv("ALLOW_ORIGINS", "*"))
+allow_origin_regex = None
+if allow_origins == ["*"]:
+    # Use regex fallback so FastAPI echoes the caller origin instead of "*".
+    allow_origin_regex = ".*"
+    allow_origins = []
+allow_credentials = _parse_bool_env("ALLOW_CREDENTIALS", default=True)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
-    allow_credentials=False,
+    allow_origin_regex=allow_origin_regex,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
