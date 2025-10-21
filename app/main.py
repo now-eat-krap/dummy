@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager
 from html import escape
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import FastAPI, Request, Query
