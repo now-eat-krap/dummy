@@ -8,6 +8,7 @@ Fast, private, and resource-friendly analytics for local environments, powered b
 - FastAPI collector translates JSON payloads into InfluxDB line protocol with route normalization to keep series cardinality low.
 - Zero-token exposure: dashboard consumes FastAPI proxy endpoints for Flux queries, protecting the Influx admin token.
 - Static HTML dashboard shows total events, top routes, and a recent event timeline (type, element, coordinates) without external dependencies.
+- rrweb snapshots automatically populate heatmap wireframes whenever pages are visited with the snippet enabled.
 - Docker Compose stack brings up InfluxDB 2.x and the app with conservative CPU/memory limits and no public Influx port.
 
 ## Quick Start
@@ -40,12 +41,23 @@ scripts/uninstall.sh
         data-endpoint="http://localhost:9000/ba"
         data-click="true" data-scroll="true" data-spa="true" data-hb="15"
         data-sample="1.0"
+        data-snapshot-upload="true"
         defer></script>
 ```
 
 - `data-sample`: 0–1 float for sampling.
 - `data-click`, `data-scroll`, `data-spa`: enable optional collectors.
 - `data-hb`: heartbeat cadence in seconds (0 disables).
+- `data-snapshot-upload`: `"true"` (default) captures a single rrweb snapshot per route to feed the heatmap wireframe; set to `"false"` to disable.
+- `data-snapshot-endpoint`: optional override for the `/ba/snapshot` capture endpoint.
+- `data-rrweb-src`: override the default rrweb CDN bundle if you need to self-host it.
+
+## Automatic Snapshots
+
+- The browser snippet lazily loads `rrweb` and captures a single full snapshot (no replay stream) per unique combination of site, normalized route, snapshot hash, and grid.
+- The snapshot is POSTed to `/ba/snapshot`, where FastAPI sanitizes the DOM and writes a wireframe HTML file under `app/heatmap_cache/<snapshot>/<route>/<viewport>/<grid>/<section>/index.html`.
+- Opening `/heatmap` renders that cached wireframe behind the click density overlay automatically.
+- To regenerate a snapshot, remove the cache directory (or clear the `logflow:snapshot:*` keys in `localStorage`) and reload the page with the snippet enabled.
 
 For HTTPS dev setups (Next.js, Vite, etc.) proxy `/ba` to `http://localhost:9000/ba` so the snippet can POST over HTTP without mixed-content issues.
 
@@ -112,6 +124,7 @@ from(bucket: "logflow")
 - InfluxDB container is private to the Compose network (no published ports).
 - App container limited to 0.5 CPU / 256 MiB; Influx limited to 0.8 CPU / 512 MiB.
 - No PII collection: snippet transmits route/title/ref/url only.
+- Snapshot payloads are sanitized into neutral wireframes (scripts stripped, text replaced) before storage.
 - `/ba` always responds `204` to avoid impacting UX even on failures.
 - Consider rotating the admin token for production or using scoped tokens.
 

@@ -14,6 +14,9 @@
       spa: script.dataset.spa === "true",
       xBins: parseBinCount(script.dataset.xbins || script.dataset.gridx, 12),
       yBins: parseBinCount(script.dataset.ybins || script.dataset.gridy, 8),
+      snapshotUpload: script.dataset.snapshotUpload !== "false",
+      snapshotEndpoint: (script.dataset.snapshotEndpoint || "").trim(),
+      rrwebSrc: script.dataset.rrwebSrc || "https://cdn.jsdelivr.net/npm/rrweb@1.1.3/dist/rrweb.min.js",
     };
     cfg.snapshotHash = (script.dataset.snapshot || "").trim() || "default";
     cfg.gridId = (script.dataset.grid || "").trim();
@@ -41,6 +44,18 @@
       return;
     }
 
+    try {
+      const endpointUrl = new URL(cfg.endpoint, window.location.href);
+      if (!cfg.snapshotEndpoint) {
+        const snapshotUrl = new URL("./snapshot", endpointUrl);
+        cfg.snapshotEndpoint = snapshotUrl.toString();
+      } else {
+        cfg.snapshotEndpoint = new URL(cfg.snapshotEndpoint, endpointUrl).toString();
+      }
+    } catch (_) {
+      cfg.snapshotEndpoint = "";
+    }
+
     if (!window.localStorage || !window.sessionStorage) {
       console.debug("logflow: storage unavailable");
     }
@@ -64,6 +79,11 @@
       lastPageSentAt: 0,
       routeNorm: normalizeRoute(window.location.pathname || "/"),
     };
+    const snapshotState = {
+      inFlightKey: null,
+      loaderPromise: null,
+    };
+    const SNAPSHOT_FLAG_PREFIX = "logflow:snapshot:";
 
     capturePage("load");
     if (cfg.spa) {
@@ -208,6 +228,7 @@
       state.closeSent = false;
       state.routeNorm = normalizeRoute(window.location.pathname || "/");
       send("page", { source: source, depth: 0, sec: 0 });
+      scheduleSnapshotUpload();
     }
 
     function secondsSinceStart() {
@@ -565,6 +586,203 @@
       }).catch(function () {
         // swallow network errors
       });
+    }
+
+    function scheduleSnapshotUpload() {
+      if (!cfg.snapshotUpload || !cfg.snapshotEndpoint) {
+        return;
+      }
+      const key = snapshotStorageKey();
+      if (!key || hasSentSnapshot(key) || snapshotState.inFlightKey === key) {
+        return;
+      }
+      snapshotState.inFlightKey = key;
+      loadRrwebRecorder()
+        .then(function (rrweb) {
+          if (!rrweb || typeof rrweb.record !== "function" || !rrweb.EventType) {
+            snapshotState.inFlightKey = null;
+            return null;
+          }
+          return captureFullSnapshot(rrweb);
+        })
+        .then(function (snapshot) {
+          if (!snapshot || !snapshot.node) {
+            snapshotState.inFlightKey = null;
+            return;
+          }
+          sendSnapshot(key, snapshot);
+        })
+        .catch(function () {
+          snapshotState.inFlightKey = null;
+        });
+    }
+
+    function loadRrwebRecorder() {
+      if (window.rrweb && typeof window.rrweb.record === "function") {
+        return Promise.resolve(window.rrweb);
+      }
+      if (snapshotState.loaderPromise) {
+        return snapshotState.loaderPromise;
+      }
+      snapshotState.loaderPromise = new Promise(function (resolve) {
+        const existing = document.querySelector('script[data-logflow-rrweb="true"]');
+        if (existing) {
+          existing.addEventListener("load", function () {
+            resolve(window.rrweb || null);
+          });
+          existing.addEventListener("error", function () {
+            resolve(null);
+          });
+          return;
+        }
+        const el = document.createElement("script");
+        el.src = cfg.rrwebSrc;
+        el.async = true;
+        el.dataset.logflowRrweb = "true";
+        el.onload = function () {
+          resolve(window.rrweb || null);
+        };
+        el.onerror = function () {
+          resolve(null);
+        };
+        document.head.appendChild(el);
+      }).then(function (rrweb) {
+        snapshotState.loaderPromise = null;
+        return rrweb;
+      });
+      return snapshotState.loaderPromise;
+    }
+
+    function captureFullSnapshot(rrweb) {
+      return new Promise(function (resolve) {
+        let stopRecording = null;
+        const timeout = window.setTimeout(function () {
+          if (typeof stopRecording === "function") {
+            try {
+              stopRecording();
+            } catch (_) {
+              // ignore
+            }
+          }
+          resolve(null);
+        }, 2000);
+        try {
+          stopRecording = rrweb.record({
+            inlineStylesheet: true,
+            recordCanvas: false,
+            collectFonts: false,
+            emit: function (event) {
+              if (!event || event.type !== rrweb.EventType.FullSnapshot) {
+                return;
+              }
+              window.clearTimeout(timeout);
+              if (typeof stopRecording === "function") {
+                try {
+                  stopRecording();
+                } catch (_) {
+                  // ignore
+                }
+              }
+              resolve({
+                node: event.data ? event.data.node : null,
+                initialOffset: event.data ? event.data.initialOffset : null,
+              });
+            },
+          });
+        } catch (_) {
+          window.clearTimeout(timeout);
+          if (typeof stopRecording === "function") {
+            try {
+              stopRecording();
+            } catch (_) {
+              // ignore
+            }
+          }
+          resolve(null);
+        }
+      });
+    }
+
+    function sendSnapshot(storageKey, snapshot) {
+      if (!cfg.snapshotEndpoint) {
+        snapshotState.inFlightKey = null;
+        return;
+      }
+      if (!snapshot || !snapshot.node) {
+        snapshotState.inFlightKey = null;
+        return;
+      }
+      const vpData = viewport();
+      const payload = {
+        site: cfg.site,
+        route: window.location.pathname || "/",
+        route_norm: state.routeNorm,
+        snapshot_hash: cfg.snapshotHash,
+        grid_id: cfg.gridId,
+        vp_bucket: viewportBucket(vpData),
+        section: "",
+        snapshot: {
+          node: snapshot.node,
+          initialOffset: snapshot.initialOffset || {},
+        },
+      };
+      const body = JSON.stringify(payload);
+      const onSuccess = function () {
+        markSnapshotSent(storageKey);
+        snapshotState.inFlightKey = null;
+      };
+      const onFailure = function () {
+        snapshotState.inFlightKey = null;
+      };
+      try {
+        const blob = new Blob([body], { type: "application/json" });
+        if (navigator.sendBeacon && navigator.sendBeacon(cfg.snapshotEndpoint, blob)) {
+          onSuccess();
+          return;
+        }
+      } catch (_) {
+        // ignore
+      }
+      fetch(cfg.snapshotEndpoint, {
+        method: "POST",
+        body: body,
+        keepalive: true,
+        mode: "cors",
+        credentials: "omit",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      })
+        .then(onSuccess)
+        .catch(onFailure);
+    }
+
+    function snapshotStorageKey() {
+      const vpTag = viewportBucket(viewport()) || "any";
+      const parts = [cfg.site || "default", state.routeNorm || "/", cfg.snapshotHash || "default", cfg.gridId || "grid", vpTag];
+      return SNAPSHOT_FLAG_PREFIX + parts.join("|");
+    }
+
+    function hasSentSnapshot(key) {
+      if (!key || !window.localStorage) {
+        return false;
+      }
+      try {
+        return window.localStorage.getItem(key) === "1";
+      } catch (_) {
+        return false;
+      }
+    }
+
+    function markSnapshotSent(key) {
+      if (!key || !window.localStorage) {
+        return;
+      }
+      try {
+        window.localStorage.setItem(key, "1");
+      } catch (_) {
+        // ignore storage quota errors
+      }
     }
 
     function parseBinCount(raw, fallback) {

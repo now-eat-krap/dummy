@@ -15,13 +15,12 @@ from fastapi.templating import Jinja2Templates
 
 from .api import _escape_flux, _parse_flux_csv, router as api_router
 from .ba import _get_influx_config, _normalize_route, router as ba_router
+from .cache_utils import HEATMAP_CACHE_DIR, snapshot_cache_path
 
 BASE_DIR = Path(__file__).resolve().parent
 BA_JS_PATH = BASE_DIR / "static" / "ba.js"
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 logger = logging.getLogger("uvicorn.error")
-HEATMAP_CACHE_DIR = Path(os.getenv("HEATMAP_CACHE_DIR", str(BASE_DIR / "heatmap_cache"))).expanduser()
-HEATMAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _parse_origins(raw: str) -> List[str]:
@@ -352,40 +351,6 @@ def _parse_grid_identifier(grid_id: Optional[str], default_cols: int, default_ro
     return default_cols, default_rows, f"{default_cols}x{default_rows}"
 
 
-def _safe_cache_segment(value: str) -> str:
-    text = (value or "default").strip()
-    if not text:
-        text = "default"
-    text = text.replace("\\", "/")
-    tokens: List[str] = []
-    for ch in text:
-        if ch.isalnum() or ch in {"-", "_", "."}:
-            tokens.append(ch)
-        elif ch == "/":
-            tokens.append("__")
-        else:
-            tokens.append("_")
-    cleaned = "".join(tokens).strip("_")
-    if not cleaned:
-        cleaned = "default"
-    return cleaned[:80]
-
-
-def _snapshot_cache_path(route_norm: str, snapshot_hash: str, vp_bucket: str, grid_id: str, section: str) -> Path:
-    route_parts = [part for part in route_norm.split("/") if part]
-    if not route_parts:
-        route_parts = ["root"]
-    safe_route = [_safe_cache_segment(part) for part in route_parts]
-    parts = [
-        _safe_cache_segment(snapshot_hash or "default"),
-        *safe_route,
-        _safe_cache_segment(vp_bucket or "any"),
-        _safe_cache_segment(grid_id or "grid"),
-        _safe_cache_segment(section or "all"),
-    ]
-    return HEATMAP_CACHE_DIR.joinpath(*parts, "index.html")
-
-
 def _load_snapshot_html(
     route_norm: str,
     snapshot_hash: str,
@@ -393,7 +358,7 @@ def _load_snapshot_html(
     grid_id: str,
     section: str,
 ) -> Tuple[str, Optional[str], Path]:
-    cache_path = _snapshot_cache_path(route_norm, snapshot_hash, vp_bucket, grid_id, section)
+    cache_path = snapshot_cache_path(route_norm, snapshot_hash, vp_bucket, grid_id, section)
     if cache_path.exists():
         content = cache_path.read_text(encoding="utf-8")
         etag = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -420,6 +385,7 @@ def _fallback_snapshot_html(
         '<div class="heatmap-placeholder">'
         f'<p>No cached snapshot available for <code>{safe_route}</code>.</p>'
         f'<p>Expected cache file: <code>{safe_path}</code></p>'
+        "<p>Visit the page with the tracking snippet to capture a snapshot automatically.</p>"
         f'<p>Key: snapshot={safe_snapshot}, viewport={safe_vp}, grid={safe_grid}, section={safe_section}</p>'
         "</div>"
     )
