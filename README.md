@@ -4,11 +4,11 @@ Fast, private, and resource-friendly analytics for local environments, powered b
 
 ## Features
 
-- Drop-in snippet that tracks page, click, scroll, SPA transition, and heartbeat events with sampling, UID/SID storage, and sendBeacon fallback.
+- One-line snapshot beacon that asks the server worker to capture a WebP background for the current route.
 - FastAPI collector translates JSON payloads into InfluxDB line protocol with route normalization to keep series cardinality low.
 - Zero-token exposure: dashboard consumes FastAPI proxy endpoints for Flux queries, protecting the Influx admin token.
 - Static HTML dashboard shows total events, top routes, and a recent event timeline (type, element, coordinates) without external dependencies.
-- Lightweight layout skeleton snapshots automatically populate heatmap wireframes whenever pages are visited with the snippet enabled.
+- Server-side Puppeteer worker salvages full-page renders; browsers never ship HTML payloads or layout skeletons anymore.
 - Docker Compose stack brings up InfluxDB 2.x and the app with conservative CPU/memory limits and no public Influx port.
 
 ## Quick Start
@@ -37,26 +37,23 @@ scripts/uninstall.sh
 
 ```html
 <script src="http://localhost:9000/ba.js"
-        data-site="logflow"
-        data-endpoint="http://localhost:9000/ba"
-        data-click="true" data-scroll="true" data-spa="true" data-hb="15"
-        data-sample="1.0"
-        data-snapshot-upload="true"
-        defer></script>
+        data-endpoint="http://localhost:9000/snapshot/request"
+        data-site="logflow"></script>
 ```
 
-- `data-sample`: 0–1 float for sampling.
-- `data-click`, `data-scroll`, `data-spa`: enable optional collectors.
-- `data-hb`: heartbeat cadence in seconds (0 disables).
-- `data-snapshot-upload`: `"true"` (default) captures a single layout skeleton per route (no images or text) to feed the heatmap wireframe; set to `"false"` to disable.
-- `data-snapshot-endpoint`: optional override for the `/ba/snapshot` capture endpoint.
+- `data-site`: optional site identifier stored alongside the snapshot metadata.
+- `data-endpoint`: override if the FastAPI host lives behind a proxy; defaults to `/snapshot/request`.
+- `data-snapshot`: optional cache bucket (defaults to `default`).
+- `data-vp`, `data-grid`, `data-section`: optional identifiers to align with heatmap filters.
+- The snippet deduplicates per route/site/snapshot per day using `localStorage` so the worker is pinged only once daily per combination.
 
 ## Automatic Snapshots
 
-- The browser snippet samples the live DOM for structural elements (header, sections, buttons, media, etc.) and converts them into a layout skeleton without sending raw text or images.
-- The skeleton is POSTed to `/ba/snapshot`, where FastAPI writes a neutral wireframe HTML file under `app/heatmap_cache/<snapshot>/<route>/<viewport>/<grid>/<section>/index.html` alongside JSON metadata.
-- Opening `/heatmap` renders that cached wireframe behind the click density overlay automatically and lets you jump between cached routes.
-- To regenerate a snapshot, remove the cache directory (or clear the `logflow:snapshot:*` keys in `localStorage`) and reload the page with the snippet enabled.
+- The snippet fires a tiny JSON beacon (`url`, `site`, `route`, optional filters) to `/snapshot/request`.
+- FastAPI resolves the cache path, calls the local Puppeteer worker (`snapshot-worker`) and waits for the capture to finish.
+- The worker launches headless Chromium, renders the page at the requested viewport, and saves a WebP to `heatmap_cache/<snapshot>/<route>/<viewport>/<grid>/<section>/snapshot.webp` with a matching `meta.json`.
+- Heatmap views load the WebP instead of the old layout skeleton, so backgrounds match the live UI precisely without browsers sharing DOM structure.
+- Snapshots are deduplicated per day; clear the `heatmap_cache` entry or the `logflow:snapshot:*` keys in `localStorage` if you need a fresh capture immediately.
 
 For HTTPS dev setups (Next.js, Vite, etc.) proxy `/ba` to `http://localhost:9000/ba` so the snippet can POST over HTTP without mixed-content issues.
 
@@ -123,7 +120,7 @@ from(bucket: "logflow")
 - InfluxDB container is private to the Compose network (no published ports).
 - App container limited to 0.5 CPU / 256 MiB; Influx limited to 0.8 CPU / 512 MiB.
 - No PII collection: snippet transmits route/title/ref/url only.
-- Snapshot payloads are sanitized into neutral wireframes (scripts stripped, text replaced) before storage.
+- Snapshot requests only include the current URL and identifiers; the Puppeteer worker does the rendering on the server so markup never leaves the browser.
 - `/ba` always responds `204` to avoid impacting UX even on failures.
 - Consider rotating the admin token for production or using scoped tokens.
 

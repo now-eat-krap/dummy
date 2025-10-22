@@ -43,7 +43,7 @@
     .stage {
       position: relative;
       width: min(96vw, 960px);
-      aspect-ratio: 16 / 9;
+      aspect-ratio: var(--snapshot-aspect, 16 / 9);
       border-radius: 22px;
       overflow: hidden;
       background: rgba(15, 23, 42, 0.75);
@@ -56,13 +56,12 @@
       overflow: hidden;
       background: rgba(15, 23, 42, 0.6);
     }
-    .wireframe-content {
+    .wireframe picture,
+    .wireframe img {
+      display: block;
       width: 100%;
       height: 100%;
-    }
-    .wireframe-content > * {
-      width: 100%;
-      height: 100%;
+      object-fit: cover;
     }
     .overlay {
       position: absolute;
@@ -221,11 +220,19 @@
       </p>
     </header>
 
-    <div class="stage">
-      <div class="wireframe" aria-label="Wireframe snapshot">
-        <div class="wireframe-content">
-          {{ snapshot_html | safe }}
-        </div>
+    <div class="stage"{% if snapshot_aspect_ratio %} style="--snapshot-aspect: {{ snapshot_aspect_ratio }}"{% endif %}>
+      <div class="wireframe" aria-label="Snapshot preview">
+        {% if snapshot_available and snapshot_media_url %}
+          <picture>
+            <img src="{{ snapshot_media_url }}" alt="Snapshot preview for {{ route_norm }}" loading="lazy" decoding="async">
+          </picture>
+        {% else %}
+          <div class="heatmap-placeholder">
+            <p>No snapshot captured yet for <code>{{ route_norm }}</code>.</p>
+            <p>Send the lightweight snapshot signal from the page to let the worker store a WebP automatically.</p>
+            <p class="muted">Expected cache: <code>{{ cache_path }}</code></p>
+          </div>
+        {% endif %}
       </div>
       <div class="overlay" aria-hidden="true">
         <div class="heatmap-grid" style="grid-template-columns: repeat({{ cols }}, 1fr); grid-template-rows: repeat({{ rows }}, 1fr);">
@@ -245,7 +252,14 @@
         {% for item in cached_routes %}
           <a href="{{ item.url }}" class="route-chip{% if item.active %} is-active{% endif %}">
             <span class="route-chip__route">{{ item.route }}</span>
-            <span class="route-chip__meta">boxes · {{ item.boxes }}</span>
+            {% if item.resolution %}
+              <span class="route-chip__meta">{{ item.resolution }} · {{ item.format }}</span>
+            {% else %}
+              <span class="route-chip__meta">{{ item.format }}</span>
+            {% endif %}
+            {% if item.size %}
+              <span class="route-chip__meta">{{ item.size }}</span>
+            {% endif %}
             {% if item.captured_at %}
               <span class="route-chip__meta">{{ item.captured_at }}</span>
             {% endif %}
@@ -271,12 +285,33 @@
           <dd><code>{{ snapshot_hash }}</code> · <code>{{ vp_bucket }}</code> · <code>{{ grid_id }}</code> · <code>{{ section or "all" }}</code></dd>
         </div>
         <div>
+          <dt>Snapshot</dt>
+          {% if snapshot_available %}
+            {% set format_label = snapshot_meta.format | default("WEBP") | upper %}
+            <dd>
+              {% if snapshot_meta.width and snapshot_meta.height %}
+                {{ snapshot_meta.width }}×{{ snapshot_meta.height }}
+              {% endif %}
+              {% if snapshot_size %}
+                {% if snapshot_meta.width and snapshot_meta.height %} · {% endif %}{{ snapshot_size }}
+              {% endif %}
+              {% if snapshot_meta.width and snapshot_meta.height or snapshot_size %} · {% endif %}{{ format_label }}
+            </dd>
+          {% else %}
+            <dd>Pending</dd>
+          {% endif %}
+        </div>
+        <div>
+          <dt>Captured</dt>
+          <dd>{% if snapshot_captured %}{{ snapshot_captured }}{% else %}Pending{% endif %}</dd>
+        </div>
+        <div>
           <dt>Cache file</dt>
           <dd><code>{{ cache_path }}</code></dd>
         </div>
       </dl>
       {% if not snapshot_available %}
-        <p class="muted">Visit the page with the Logflow snippet enabled to capture a snapshot. The first load will populate <code>{{ cache_full_path }}</code>.</p>
+        <p class="muted">Trigger the snapshot beacon from the page to let the server-side worker capture a WebP. The first successful run will populate <code>{{ cache_full_path }}</code>.</p>
       {% endif %}
     </section>
 

@@ -1,15 +1,15 @@
 import hashlib
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime
-from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from .api import _escape_flux, _parse_flux_csv, router as api_router
 from .ba import _get_influx_config, _normalize_route, router as ba_router
 from .cache_utils import HEATMAP_CACHE_DIR, load_metadata, snapshot_cache_path
+from .snapshot import router as snapshot_router
 
 BASE_DIR = Path(__file__).resolve().parent
 BA_JS_PATH = BASE_DIR / "static" / "ba.js"
@@ -87,6 +88,7 @@ HEATMAP_ROWS = _parse_int_env("HEATMAP_ROWS", default=8, minimum=1)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 app.include_router(ba_router)
 app.include_router(api_router)
+app.include_router(snapshot_router)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -154,13 +156,26 @@ async def heatmap(
     cache_vp_key = vp_param if vp_filter else "any"
     cache_section_key = section_param if section_filter else "all"
 
-    snapshot_html, etag, cache_path = _load_snapshot_html(
+    snapshot_info = _snapshot_media_info(
         route_norm=route_norm,
         snapshot_hash=cache_snapshot_key,
         vp_bucket=cache_vp_key,
         grid_id=grid_id,
         section=cache_section_key,
     )
+    cache_path = snapshot_info["path"]
+    etag = snapshot_info["etag"]
+    metadata = snapshot_info["metadata"]
+    snapshot_media_url = None
+    if snapshot_info["available"]:
+        snapshot_media_url = _build_snapshot_media_url(
+            route_norm=route_norm,
+            snapshot_hash=cache_snapshot_key,
+            vp_bucket=cache_vp_key,
+            grid_id=grid_id,
+            section=cache_section_key,
+            etag=etag,
+        )
 
     try:
         cache_rel = cache_path.relative_to(HEATMAP_CACHE_DIR)
@@ -183,8 +198,12 @@ async def heatmap(
         "grid_id": grid_id,
         "section": section_param or "",
         "site": site_param,
-        "snapshot_html": snapshot_html,
-        "snapshot_available": etag is not None,
+        "snapshot_media_url": snapshot_media_url,
+        "snapshot_available": snapshot_info["available"],
+        "snapshot_meta": metadata,
+        "snapshot_size": _format_filesize(snapshot_info["size_bytes"]),
+        "snapshot_aspect_ratio": _format_aspect_ratio(metadata),
+        "snapshot_captured": _format_timestamp(metadata.get("captured_at")) if metadata else "",
         "cache_path": str(cache_rel),
         "cache_full_path": str(cache_path),
         "cached_routes": cached_routes,
@@ -234,7 +253,13 @@ def _build_cached_route_links(
                 "route": route_value,
                 "route_norm": norm_value,
                 "captured_at": entry.get("captured_at"),
-                "boxes": entry.get("boxes"),
+                "width": entry.get("width"),
+                "height": entry.get("height"),
+                "bytes": entry.get("bytes"),
+                "format": entry.get("format") or "webp",
+                "vp_bucket": entry.get("vp_bucket"),
+                "grid_id": entry.get("grid_id"),
+                "section": entry.get("section"),
             }
         )
     if not filtered:
@@ -263,7 +288,9 @@ def _build_cached_route_links(
                 "route": route_value or norm_value,
                 "route_norm": norm_value,
                 "url": url,
-                "boxes": item.get("boxes") or 0,
+                "resolution": _format_resolution(item.get("width"), item.get("height")),
+                "size": _format_filesize(item.get("bytes")),
+                "format": str(item.get("format") or "webp").upper(),
                 "captured_at": _format_timestamp(item.get("captured_at")),
                 "active": norm_value == route_norm,
             }
@@ -477,41 +504,156 @@ def _parse_grid_identifier(grid_id: Optional[str], default_cols: int, default_ro
     return default_cols, default_rows, f"{default_cols}x{default_rows}"
 
 
-def _load_snapshot_html(
-    route_norm: str,
-    snapshot_hash: str,
-    vp_bucket: str,
-    grid_id: str,
-    section: str,
-) -> Tuple[str, Optional[str], Path]:
-    cache_path = snapshot_cache_path(route_norm, snapshot_hash, vp_bucket, grid_id, section)
-    if cache_path.exists():
-        content = cache_path.read_text(encoding="utf-8")
-        etag = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        return content, etag, cache_path
-    placeholder = _fallback_snapshot_html(route_norm, snapshot_hash, vp_bucket, grid_id, section, cache_path)
-    return placeholder, None, cache_path
+@app.get("/heatmap/media")
+async def heatmap_media(
+    route: str = Query("/", description="Route path to inspect"),
+    snapshot: str = Query("default", description="Snapshot hash identifier"),
+    vp: str = Query("any", description="Viewport bucket identifier"),
+    grid: Optional[str] = Query(None, description="Grid identifier, e.g. 12x8"),
+    section: Optional[str] = Query(None, description="Section label"),
+) -> FileResponse:
+    route_norm = _normalize_route(route or "/")
+    _, _, grid_id = _parse_grid_identifier(grid, HEATMAP_COLS, HEATMAP_ROWS)
+    snapshot_hash = (snapshot or "default").strip() or "default"
+    vp_bucket = (vp or "any").strip() or "any"
+    section_value = (section or "all").strip() or "all"
 
-
-def _fallback_snapshot_html(
-    route_norm: str,
-    snapshot_hash: str,
-    vp_bucket: str,
-    grid_id: str,
-    section: str,
-    expected_path: Path,
-) -> str:
-    safe_route = escape(route_norm or "/")
-    safe_snapshot = escape(snapshot_hash or "default")
-    safe_vp = escape(vp_bucket or "any")
-    safe_grid = escape(grid_id or "")
-    safe_section = escape(section or "all")
-    safe_path = escape(str(expected_path))
-    return (
-        '<div class="heatmap-placeholder">'
-        f'<p>No cached snapshot available for <code>{safe_route}</code>.</p>'
-        f'<p>Expected cache file: <code>{safe_path}</code></p>'
-        "<p>Visit the page with the tracking snippet to capture a snapshot automatically.</p>"
-        f'<p>Key: snapshot={safe_snapshot}, viewport={safe_vp}, grid={safe_grid}, section={safe_section}</p>'
-        "</div>"
+    info = _snapshot_media_info(
+        route_norm=route_norm,
+        snapshot_hash=snapshot_hash,
+        vp_bucket=vp_bucket,
+        grid_id=grid_id,
+        section=section_value,
     )
+    if not info["available"]:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+
+    headers: Dict[str, str] = {}
+    if info["etag"]:
+        headers["ETag"] = info["etag"]
+    media_type = _guess_media_type(info["metadata"].get("format"))
+    return FileResponse(info["path"], media_type=media_type, headers=headers)
+
+
+def _snapshot_media_info(
+    *,
+    route_norm: str,
+    snapshot_hash: str,
+    vp_bucket: str,
+    grid_id: str,
+    section: str,
+) -> Dict[str, Any]:
+    cache_path = snapshot_cache_path(route_norm, snapshot_hash, vp_bucket, grid_id, section)
+    metadata = _read_snapshot_metadata(cache_path)
+    available = cache_path.exists()
+    etag = metadata.get("sha256")
+    size_bytes = 0
+    if available:
+        try:
+            size_bytes = cache_path.stat().st_size
+        except OSError:
+            size_bytes = 0
+        if not etag:
+            try:
+                with cache_path.open("rb") as file_obj:
+                    etag = hashlib.sha256(file_obj.read()).hexdigest()
+            except OSError:
+                etag = None
+    try:
+        relative = cache_path.relative_to(HEATMAP_CACHE_DIR)
+    except ValueError:
+        relative = cache_path
+    metadata.setdefault("format", "webp")
+    metadata.setdefault("rel_path", str(relative).replace("\\", "/"))
+    return {
+        "path": cache_path,
+        "relative_path": relative,
+        "available": available,
+        "etag": etag,
+        "size_bytes": size_bytes,
+        "metadata": metadata,
+    }
+
+
+def _read_snapshot_metadata(cache_path: Path) -> Dict[str, Any]:
+    meta_path = cache_path.with_name("meta.json")
+    if not meta_path.exists():
+        return {}
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to read snapshot metadata %s: %s", meta_path, exc)
+        return {}
+
+
+def _build_snapshot_media_url(
+    *,
+    route_norm: str,
+    snapshot_hash: str,
+    vp_bucket: str,
+    grid_id: str,
+    section: str,
+    etag: Optional[str],
+) -> str:
+    params: List[Tuple[str, str]] = [
+        ("route", route_norm or "/"),
+        ("snapshot", snapshot_hash or "default"),
+        ("vp", vp_bucket or "any"),
+        ("grid", grid_id or ""),
+        ("section", section or ""),
+    ]
+    if etag:
+        params.append(("v", etag[:12]))
+    query = urlencode([(key, value) for key, value in params if value])
+    return f"/heatmap/media?{query}"
+
+
+def _format_filesize(value: Any) -> str:
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return ""
+    if size <= 0:
+        return ""
+    units = ["B", "KB", "MB", "GB", "TB"]
+    number = float(size)
+    idx = 0
+    while number >= 1024 and idx < len(units) - 1:
+        number /= 1024.0
+        idx += 1
+    if idx == 0:
+        return f"{int(number)} {units[idx]}"
+    return f"{number:.1f} {units[idx]}"
+
+
+def _format_aspect_ratio(metadata: Dict[str, Any]) -> Optional[str]:
+    try:
+        width = int(metadata.get("width") or 0)
+        height = int(metadata.get("height") or 0)
+    except (TypeError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    return f"{width} / {height}"
+
+
+def _format_resolution(width: Any, height: Any) -> str:
+    try:
+        w = int(width)
+        h = int(height)
+    except (TypeError, ValueError):
+        return ""
+    if w <= 0 or h <= 0:
+        return ""
+    return f"{w}×{h}"
+
+
+def _guess_media_type(format_hint: Any) -> str:
+    token = str(format_hint or "webp").lower().strip()
+    if token in {"jpeg", "jpg"}:
+        return "image/jpeg"
+    if token == "png":
+        return "image/png"
+    if token == "avif":
+        return "image/avif"
+    return "image/webp"

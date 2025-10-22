@@ -1,0 +1,13 @@
+{
+  "name": "snapshot-worker",
+  "version": "1.0.0",
+  "description": "Local Puppeteer worker that captures full-page WebP snapshots for Logflow heatmaps.",
+  "type": "module",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js"
+  },
+  "dependencies": {
+    "puppeteer": "^22.6.3"
+  }
+}

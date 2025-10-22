@@ -8,8 +8,6 @@ from typing import Any, Dict
 import httpx
 from fastapi import APIRouter, Request, Response
 
-from .cache_utils import render_skeleton_html, snapshot_cache_path, write_metadata
-
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
 
@@ -337,71 +335,3 @@ async def ingest(request: Request) -> Response:
 
     return Response(status_code=204)
 
-
-@router.post("/ba/snapshot", status_code=204)
-async def ingest_snapshot(request: Request) -> Response:
-    try:
-        payload = await request.json()
-    except Exception:
-        return Response(status_code=204)
-
-    if not isinstance(payload, dict):
-        return Response(status_code=204)
-
-    route = _normalize_route(payload.get("route") or payload.get("path") or payload.get("url"))
-    route_norm_raw = str(payload.get("route_norm") or "").strip()
-    if route_norm_raw:
-        route_norm = _normalize_route(route_norm_raw)
-    else:
-        route_norm = route
-
-    site_value = str(payload.get("site") or "").strip()
-    snapshot_hash = str(payload.get("snapshot_hash") or "default").strip() or "default"
-    vp_bucket = str(payload.get("vp_bucket") or payload.get("vp") or "").strip() or "any"
-    grid_id = str(payload.get("grid_id") or payload.get("grid") or "").strip() or "grid"
-    section = str(payload.get("section") or "").strip() or "all"
-
-    skeleton_payload = payload.get("skeleton")
-    if not isinstance(skeleton_payload, dict):
-        return Response(status_code=204)
-
-    skeleton_copy = dict(skeleton_payload)
-    if "captured_at" not in skeleton_copy:
-        skeleton_copy["captured_at"] = int(time.time() * 1000)
-    if "label" not in skeleton_copy:
-        if site_value:
-            skeleton_copy["label"] = f"{site_value} · {route_norm}"
-        else:
-            skeleton_copy["label"] = f"{route_norm} · {snapshot_hash}"
-
-    try:
-        html = render_skeleton_html(skeleton_copy)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("Skeleton serialization failed: %s", exc)
-        return Response(status_code=204)
-
-    cache_path = snapshot_cache_path(route_norm, snapshot_hash, vp_bucket, grid_id, section)
-    try:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(html, encoding="utf-8")
-        logger.info("Stored snapshot cache at %s", cache_path)
-        metadata = {
-            "route": payload.get("route") or route,
-            "route_norm": route_norm,
-            "snapshot_hash": snapshot_hash,
-            "vp_bucket": vp_bucket,
-            "grid_id": grid_id,
-            "section": section,
-            "site": site_value or "default",
-            "boxes": len(skeleton_copy.get("boxes") or []),
-            "captured_at": skeleton_copy.get("captured_at"),
-            "label": skeleton_copy.get("label"),
-            "viewport": skeleton_copy.get("viewport"),
-            "cache_path": str(cache_path),
-        }
-        write_metadata(cache_path, metadata)
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("Failed to persist snapshot cache: %s", exc)
-        return Response(status_code=204)
-
-    return Response(status_code=204)

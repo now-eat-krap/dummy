@@ -31,13 +31,33 @@ services:
       INFLUX_ORG: logflow
       INFLUX_BUCKET: logflow
       ALLOW_ORIGINS: "*"
+      HEATMAP_CACHE_DIR: /data/heatmap
+      SNAPSHOT_WORKER_URL: http://snapshot-worker:9230
     ports:
       - "8080:9000"            # 그대로 유지 (대시보드/ba.js)
     depends_on:
       influxdb:
         condition: service_healthy
+      snapshot-worker:
+        condition: service_started
+    volumes:
+      - heatmap-cache:/data/heatmap
     mem_limit: "256m"
     cpus: "0.5"
+
+  snapshot-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.snapshot
+    environment:
+      HEATMAP_CACHE_DIR: /data/heatmap
+      SNAPSHOT_WORKER_PORT: 9230
+      SNAPSHOT_WEBP_QUALITY: 85
+    volumes:
+      - heatmap-cache:/data/heatmap
+    mem_limit: "512m"
+    cpus: "0.7"
+    restart: unless-stopped
   
   llamacpp:
     image: ghcr.io/ggerganov/llama.cpp:server
@@ -64,3 +84,4 @@ services:
 
 volumes:
   influx-data:
+  heatmap-cache:
