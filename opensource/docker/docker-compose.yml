@@ -32,7 +32,7 @@ services:
       INFLUX_BUCKET: logflow
       ALLOW_ORIGINS: "*"
     ports:
-      - "8080:9000"
+      - "8080:9000"            # 그대로 유지 (대시보드/ba.js)
     depends_on:
       influxdb:
         condition: service_healthy
@@ -41,14 +41,25 @@ services:
   
   llamacpp:
     image: ghcr.io/ggerganov/llama.cpp:server
-    ports: ["8080:8080"]
+    # 모델/포트/스레드 등을 'command'로 명시 (환경변수 대신 확실하게)
+    command: [
+      "-m", "/models/Qwen2.5-0.5B-Instruct-Q3_K_M.gguf",
+      "-c", "512", "-t", "2",
+      "--ubatch", "16", "-b", "16",
+      "-ngl", "0",
+      "--host", "0.0.0.0", "--port", "8000"
+    ]
     volumes:
-      - ./models:/models:ro
-    environment:
-      LLAMA_ARG_MODEL: /models/Qwen2.5-0.5B-Instruct-Q3_K_M.gguf  # 파일명에 맞게
-      LLAMA_ARG_CTX_SIZE: 512   # 초저사양 권장
-      LLAMA_ARG_PORT: 8000
-      LLAMA_ARG_ENDPOINT_METRICS: 1
+      - ../models:/models:ro   # 스크립트가 ../models에 받도록 해뒀으니 여기를 마운트
+    ports:
+      - "8081:8000"            # 호스트 8081로 노출 (app과 충돌 피함)
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/models"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    mem_limit: "512m"
+    cpus: "0.8"
     restart: unless-stopped
 
 volumes:
