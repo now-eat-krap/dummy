@@ -9,13 +9,13 @@ services:
     environment:
       NODE_ENV: production
     restart: unless-stopped
-  logflow-analytics:
-    build:
-      context: ./logflow-analytics
-      dockerfile: Dockerfile
-    container_name: logflow-analytics-app
-    ports:
-      - "8081:3001"
-    environment:
-      NODE_ENV: production
-    restart: unless-stopped
+  # logflow-analytics:
+  #   build:
+  #     context: ./logflow-analytics
+  #     dockerfile: Dockerfile
+  #   container_name: logflow-analytics-app
+  #   ports:
+  #     - "8081:3001"
+  #   environment:
+  #     NODE_ENV: production
+  #   restart: unless-stopped

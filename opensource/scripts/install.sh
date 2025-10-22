@@ -27,6 +27,33 @@ COMPOSE_FILE="${REPO_DIR}/docker/docker-compose.yml"
 echo "[logflow] pulling images..."
 "${COMPOSE_CMD[@]}" -f "${COMPOSE_FILE}" pull --ignore-pull-failures
 
+###############################################################################
+# (NEW) Download Qwen2.5-0.5B-Instruct GGUF model if missing
+###############################################################################
+MODEL_DIR="${REPO_DIR}/models"
+MODEL_NAME="Qwen2.5-0.5B-Instruct-Q3_K_M.gguf"
+# Hugging Face 직링크 (공개 리포). 302 리다이렉트가 있으므로 -L 사용.
+MODEL_URL="https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/${MODEL_NAME}?download=true"
+
+echo "[logflow] ensuring GGUF model exists: ${MODEL_DIR}/${MODEL_NAME}"
+mkdir -p "${MODEL_DIR}"
+if [[ ! -s "${MODEL_DIR}/${MODEL_NAME}" ]]; then
+  echo "[logflow] downloading ${MODEL_NAME} ..."
+  # 부분 다운로드 파일로 받아 완료 시 원본 이름으로 교체 (중간 실패 대비)
+  TMP_FILE="${MODEL_DIR}/${MODEL_NAME}.part"
+  if ! curl -fL --progress-bar -o "${TMP_FILE}" "${MODEL_URL}"; then
+    echo "[logflow] model download failed from Hugging Face." >&2
+    rm -f "${TMP_FILE}" || true
+    exit 1
+  fi
+  mv "${TMP_FILE}" "${MODEL_DIR}/${MODEL_NAME}"
+  chmod 644 "${MODEL_DIR}/${MODEL_NAME}" || true
+  echo "[logflow] model downloaded: ${MODEL_DIR}/${MODEL_NAME}"
+else
+  echo "[logflow] model already present, skipping download."
+fi
+###############################################################################
+
 echo "[logflow] starting services (with --build)..."
 "${COMPOSE_CMD[@]}" -f "${COMPOSE_FILE}" up -d --build
 

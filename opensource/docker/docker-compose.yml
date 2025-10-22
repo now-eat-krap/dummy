@@ -38,6 +38,18 @@ services:
         condition: service_healthy
     mem_limit: "256m"
     cpus: "0.5"
+  
+  llamacpp:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    ports: ["8080:8080"]
+    volumes:
+      - ./models:/models:ro
+    environment:
+      LLAMA_ARG_MODEL: /models/Qwen2.5-0.5B-Instruct-Q3_K_M.gguf  # 파일명에 맞게
+      LLAMA_ARG_CTX_SIZE: 512   # 초저사양 권장
+      LLAMA_ARG_PORT: 8000
+      LLAMA_ARG_ENDPOINT_METRICS: 1
+    restart: unless-stopped
 
 volumes:
   influx-data:
