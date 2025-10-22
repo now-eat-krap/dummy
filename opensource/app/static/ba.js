@@ -45,11 +45,12 @@
 
     try {
       const endpointUrl = new URL(cfg.endpoint, window.location.href);
+      const snapshotBase = endpointUrl.href.endsWith("/") ? endpointUrl.href : endpointUrl.href + "/";
       if (!cfg.snapshotEndpoint) {
-        const snapshotUrl = new URL("./snapshot", endpointUrl);
+        const snapshotUrl = new URL("snapshot", snapshotBase);
         cfg.snapshotEndpoint = snapshotUrl.toString();
       } else {
-        cfg.snapshotEndpoint = new URL(cfg.snapshotEndpoint, endpointUrl).toString();
+        cfg.snapshotEndpoint = new URL(cfg.snapshotEndpoint, snapshotBase).toString();
       }
     } catch (_) {
       cfg.snapshotEndpoint = "";
