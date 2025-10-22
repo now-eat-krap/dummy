@@ -30,7 +30,7 @@ echo "[logflow] pulling images..."
 echo "[logflow] starting services (with --build)..."
 "${COMPOSE_CMD[@]}" -f "${COMPOSE_FILE}" up -d --build
 
-HEALTH_URL="http://localhost:8001/ba.js"
+HEALTH_URL="http://localhost:8080/ba.js"
 echo "[logflow] waiting for ${HEALTH_URL} ..."
 for attempt in $(seq 1 30); do
   if curl -fsS "${HEALTH_URL}" >/dev/null 2>&1; then
@@ -50,12 +50,12 @@ Logflow lightweight analytics stack is running.
 
 Snippet (update the endpoint hostname if accessed remotely):
 
-<script src="http://localhost:8001/ba.js"
+<script src="http://localhost:8080/ba.js"
         data-site="logflow"
-        data-endpoint="http://localhost:8001/ba"
+        data-endpoint="http://localhost:8080/ba"
         data-click="true" data-scroll="true" data-spa="true" data-hb="15"
         data-sample="1.0"
         defer></script>
 
-Dashboard: http://localhost:8001/
+Dashboard: http://localhost:8080/
 EOF

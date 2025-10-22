@@ -32,7 +32,7 @@ services:
       INFLUX_BUCKET: logflow
       ALLOW_ORIGINS: "*"
     ports:
-      - "8001:9000"
+      - "8080:9000"
     depends_on:
       influxdb:
         condition: service_healthy
