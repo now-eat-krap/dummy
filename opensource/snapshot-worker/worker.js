@@ -102,6 +102,13 @@ function createHttpError(statusCode, message) {
   return err;
 }
 
+function delay(ms) {
+  if (!ms || ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function handleCapture(payload) {
   const job = validateJob(payload);
   await mkdir(path.dirname(job.resolvedPath), { recursive: true });
@@ -122,7 +129,7 @@ async function handleCapture(payload) {
       timeout: NAVIGATION_TIMEOUT,
     });
     if (POST_NAVIGATION_WAIT > 0) {
-      await page.waitForTimeout(POST_NAVIGATION_WAIT);
+      await delay(POST_NAVIGATION_WAIT);
     }
     const screenshotBuffer = await page.screenshot({
       path: job.resolvedPath,
