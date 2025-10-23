@@ -39,11 +39,11 @@ export default function RootLayout({
           defer
         /> */}
         <Script
-          src="https://54.180.149.234:8080/public/snapshot-sdk.js"
+          src="http://54.180.149.234:8080/public/snapshot-sdk.js"
           data-endpoint="http://54.180.149.234:8080"
           data-viewports="1366x900,390x844"
           data-mode="auto" data-probe="on"
-          defer
+          strategy="afterInteractive"
         />
       </head>
       <body className={`font-sans antialiased`}>
