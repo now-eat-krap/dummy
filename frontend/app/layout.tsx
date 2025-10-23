@@ -25,7 +25,7 @@ export default function RootLayout({
   return (
     <html lang="ko">
       <head>
-        <Script
+        {/* <Script
           src="http://114.108.153.60:8080/ba.js"
           data-site="logflow"
           data-endpoint="http://114.108.153.60:8080/ba"
@@ -36,6 +36,13 @@ export default function RootLayout({
           data-sample="1.0"
           strategy="beforeInteractive"
           data-snapshot-upload="true"
+          defer
+        /> */}
+        <Script
+          src="https://your-cdn/snapshot-sdk.js"
+          data-endpoint="http://54.180.149.234:8080"
+          data-viewports="1366x900,390x844"
+          data-mode="auto" data-probe="on"
           defer
         />
       </head>
